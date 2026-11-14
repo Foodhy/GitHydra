@@ -29,6 +29,16 @@ fn commit_diff(path: String, sha: String) -> Result<git::CommitDiff, git::GitErr
     git::commit_diff(&path, &sha)
 }
 
+#[tauri::command]
+fn stage_paths(path: String, paths: Vec<String>) -> Result<(), git::GitError> {
+    git::stage_paths(&path, &paths)
+}
+
+#[tauri::command]
+fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), git::GitError> {
+    git::unstage_paths(&path, &paths)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -40,7 +50,9 @@ pub fn run() {
             list_branches,
             list_commits,
             working_tree_status,
-            commit_diff
+            commit_diff,
+            stage_paths,
+            unstage_paths
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

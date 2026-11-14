@@ -7,18 +7,20 @@ export function useWorkingTree(path: string | null) {
   const [entries, setEntries] = useState<WorkingTreeEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [generation, setGeneration] = useState(0);
 
   useEffect(() => {
     if (!path) {
       return;
     }
+    const loadId = generation;
     let cancelled = false;
     setLoading(true);
     setError(null);
     tauriGit
       .workingTreeStatus(path)
       .then((status) => {
-        if (!cancelled) {
+        if (!cancelled && loadId === generation) {
           setEntries(status.entries);
         }
       })
@@ -35,7 +37,11 @@ export function useWorkingTree(path: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, generation]);
 
-  return { entries, error, loading };
+  function reload() {
+    setGeneration((current) => current + 1);
+  }
+
+  return { entries, error, loading, reload };
 }

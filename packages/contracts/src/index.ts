@@ -70,7 +70,6 @@ export interface CommitDiff {
  *
  * Mutaciones reservadas para una fase posterior (no están en el puerto
  * activo para que nadie las invoque a medias):
- * - stagePaths(path, paths)
  * - commit(path, summary, description)
  * - checkout(path, branch)
  */
@@ -84,4 +83,6 @@ export interface GitPort {
   ): Promise<CommitPage>;
   workingTreeStatus(path: string): Promise<WorkingTreeStatus>;
   commitDiff(path: string, sha: string): Promise<CommitDiff>;
+  stagePaths(path: string, paths: string[]): Promise<void>;
+  unstagePaths(path: string, paths: string[]): Promise<void>;
 }

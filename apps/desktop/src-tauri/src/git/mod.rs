@@ -239,6 +239,67 @@ pub fn working_tree_status(path: &str) -> Result<WorkingTreeStatus, GitError> {
     Ok(WorkingTreeStatus { entries })
 }
 
+pub fn stage_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let repo = discover(repo_path)?;
+    for file in paths {
+        if path_is_conflicted(&repo, file)? {
+            return Err(GitError::Io(format!(
+                "Resuelve el conflicto antes de hacer stage: {file}"
+            )));
+        }
+    }
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Io("El repositorio no tiene directorio de trabajo".into()))?;
+    let mut index = repo.index().map_err(map_git)?;
+    for file in paths {
+        let relative = Path::new(file);
+        if workdir.join(relative).exists() {
+            index.add_path(relative).map_err(map_git)?;
+        } else {
+            index.remove_path(relative).map_err(map_git)?;
+        }
+    }
+    index.write().map_err(map_git)
+}
+
+pub fn unstage_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let repo = discover(repo_path)?;
+    match repo.head() {
+        Ok(reference) => {
+            let target = reference.peel(git2::ObjectType::Commit).map_err(map_git)?;
+            repo.reset_default(Some(&target), paths.iter().map(String::as_str))
+                .map_err(map_git)
+        }
+        Err(err) if err.code() == git2::ErrorCode::UnbornBranch => {
+            let mut index = repo.index().map_err(map_git)?;
+            for file in paths {
+                index.remove_path(Path::new(file)).map_err(map_git)?;
+            }
+            index.write().map_err(map_git)
+        }
+        Err(err) => Err(map_git(err)),
+    }
+}
+
+fn path_is_conflicted(repo: &Repository, file: &str) -> Result<bool, GitError> {
+    let mut options = StatusOptions::new();
+    options
+        .include_untracked(true)
+        .pathspec(file)
+        .disable_pathspec_match(true);
+    let statuses = repo.statuses(Some(&mut options)).map_err(map_git)?;
+    Ok(statuses
+        .iter()
+        .any(|entry| entry.status().is_conflicted() && entry.path() == Some(file)))
+}
+
 pub fn commit_diff(path: &str, sha: &str) -> Result<CommitDiff, GitError> {
     let repo = discover(path)?;
     let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
@@ -537,6 +598,20 @@ mod tests {
         let status = working_tree_status(&info.path).expect("status");
         assert!(status.entries.iter().any(|entry| {
             entry.path == "notes.txt" && entry.kind == "untracked" && !entry.staged
+        }));
+
+        stage_paths(&info.path, &["notes.txt".to_string()]).expect("stage");
+        let staged = working_tree_status(&info.path).expect("staged");
+        assert!(
+            staged.entries.iter().any(|entry| {
+                entry.path == "notes.txt" && entry.staged && entry.kind == "added"
+            })
+        );
+
+        unstage_paths(&info.path, &["notes.txt".to_string()]).expect("unstage");
+        let unstaged = working_tree_status(&info.path).expect("unstaged");
+        assert!(unstaged.entries.iter().any(|entry| {
+            entry.path == "notes.txt" && !entry.staged && entry.kind == "untracked"
         }));
 
         let sha = info.head_sha.expect("head");

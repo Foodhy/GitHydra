@@ -24,4 +24,10 @@ export const tauriGit: GitPort = {
   commitDiff(path, sha) {
     return invoke<CommitDiff>("commit_diff", { path, sha });
   },
+  stagePaths(path, paths) {
+    return invoke<void>("stage_paths", { path, paths });
+  },
+  unstagePaths(path, paths) {
+    return invoke<void>("unstage_paths", { path, paths });
+  },
 };

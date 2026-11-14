@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-El paso activo es el **3**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.3.0`.
+El paso activo es el **4**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.4.0`.
 
 ## Hecho — fase 0
 
@@ -25,9 +25,9 @@ Al elegir un commit, el panel derecho muestra los archivos de ese commit y el pa
 
 Columnas en SVG a partir de `parentShas`, alineadas con las filas del historial. El clic sigue abriendo el diff.
 
-### 3. Stage
+### 3. Stage — hecho en 0.4.0
 
-Mover archivos entre "sin stage" y "en stage". Todavía sin crear el commit.
+Clic en un archivo, o en Todos, lo mueve entre "sin stage" y "en stage". El formulario de commit sigue inactivo.
 
 ### 4. Commit
 

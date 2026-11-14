@@ -1,10 +1,35 @@
 import type { WorkingTreeEntry } from "@githydra/contracts";
+import { useState } from "react";
 import { useWorkingTree } from "../../hooks/useWorkingTree";
+import { toGitClientError } from "../../lib/git/errors";
+import { tauriGit } from "../../lib/git/tauri-git-adapter";
 
 export function StagingPanel({ path }: { path: string }) {
-  const { entries, error, loading } = useWorkingTree(path);
+  const { entries, error, loading, reload } = useWorkingTree(path);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const unstaged = entries.filter((entry) => !entry.staged);
   const staged = entries.filter((entry) => entry.staged);
+
+  async function move(filePaths: string[], fromStaged: boolean) {
+    if (filePaths.length === 0 || busy) {
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      if (fromStaged) {
+        await tauriGit.unstagePaths(path, filePaths);
+      } else {
+        await tauriGit.stagePaths(path, filePaths);
+      }
+      reload();
+    } catch (reason: unknown) {
+      setActionError(toGitClientError(reason).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <aside className="flex h-full flex-col bg-surface-raised">
@@ -15,8 +40,25 @@ export function StagingPanel({ path }: { path: string }) {
       </header>
       <div className="min-h-0 flex-1 overflow-auto">
         {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
-        <FileGroup title="Sin stage" entries={unstaged} />
-        <FileGroup title="En stage" entries={staged} />
+        {actionError ? (
+          <p className="px-3 py-2 text-xs text-warn">{actionError}</p>
+        ) : null}
+        <FileGroup
+          title="Sin stage"
+          entries={unstaged}
+          busy={busy}
+          onMove={(filePaths) => {
+            void move(filePaths, false);
+          }}
+        />
+        <FileGroup
+          title="En stage"
+          entries={staged}
+          busy={busy}
+          onMove={(filePaths) => {
+            void move(filePaths, true);
+          }}
+        />
       </div>
       <form
         className="border-t border-line p-3"
@@ -53,28 +95,48 @@ export function StagingPanel({ path }: { path: string }) {
 function FileGroup({
   title,
   entries,
+  busy,
+  onMove,
 }: {
   title: string;
   entries: WorkingTreeEntry[];
+  busy: boolean;
+  onMove: (paths: string[]) => void;
 }) {
   return (
     <section className="border-b border-line">
-      <h2 className="px-3 py-2 text-[11px] font-semibold tracking-wide text-muted uppercase">
-        {title}
-      </h2>
+      <div className="flex items-center justify-between px-3 py-2">
+        <h2 className="text-[11px] font-semibold tracking-wide text-muted uppercase">
+          {title}
+        </h2>
+        {entries.length > 0 ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onMove(entries.map((entry) => entry.path))}
+            className="text-[11px] text-accent disabled:text-muted"
+          >
+            Todos
+          </button>
+        ) : null}
+      </div>
       {entries.length === 0 ? (
         <p className="px-3 pb-2 text-xs text-muted">Vacío</p>
       ) : (
         <ul className="pb-2">
           {entries.map((entry) => (
-            <li
-              key={`${entry.staged ? "s" : "u"}:${entry.path}:${entry.kind}`}
-              className="flex items-center gap-2 px-3 py-0.5 font-mono text-xs"
-            >
-              <span className="w-4 text-warn">{kindMark(entry.kind)}</span>
-              <span className="truncate" title={entry.path}>
-                {entry.path}
-              </span>
+            <li key={`${entry.staged ? "s" : "u"}:${entry.path}:${entry.kind}`}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onMove([entry.path])}
+                className="flex w-full items-center gap-2 px-3 py-0.5 text-left font-mono text-xs hover:bg-surface-overlay disabled:opacity-60"
+              >
+                <span className="w-4 text-warn">{kindMark(entry.kind)}</span>
+                <span className="truncate" title={entry.path}>
+                  {entry.path}
+                </span>
+              </button>
             </li>
           ))}
         </ul>
