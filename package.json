@@ -1,7 +1,7 @@
 {
   "name": "githydra",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "engines": {
     "node": ">=22"
   },
@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "pnpm --filter @githydra/desktop tauri dev",
     "build": "pnpm --filter @githydra/desktop tauri build",
+    "install-app": "pnpm build && bash scripts/install-macos.sh",
     "mcp": "pnpm --filter @githydra/mcp build && pnpm --filter @githydra/mcp start",
     "check": "biome check . && pnpm --filter @githydra/desktop check:rust",
     "format": "biome check --write ."

@@ -3,7 +3,6 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { BranchPanel } from "../branches/BranchPanel";
 import { CommitDiffPanel } from "../diff/CommitDiffPanel";
 import { EditorPanel } from "../editor/EditorPanel";
-import { GraphPanel } from "../graph/GraphPanel";
 import { HistoryPanel } from "../history/HistoryPanel";
 import { StagingPanel } from "../staging/StagingPanel";
 import { TerminalPanel } from "../terminal/TerminalPanel";
@@ -53,18 +52,11 @@ export function WorkspaceShell({ path }: { path: string }) {
                   </div>
                   <div className="min-h-0 flex-1">
                     {tab === "history" ? (
-                      <div className="flex h-full">
-                        <div className="w-28 shrink-0">
-                          <GraphPanel />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <HistoryPanel
-                            path={path}
-                            selectedSha={selectedSha}
-                            onSelect={toggleCommit}
-                          />
-                        </div>
-                      </div>
+                      <HistoryPanel
+                        path={path}
+                        selectedSha={selectedSha}
+                        onSelect={toggleCommit}
+                      />
                     ) : (
                       <EditorPanel />
                     )}

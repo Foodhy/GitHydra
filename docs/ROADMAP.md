@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-El paso activo es el **2**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.2.0`.
+El paso activo es el **3**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.3.0`.
 
 ## Hecho — fase 0
 
@@ -21,9 +21,9 @@ Ya está en el primer commit:
 
 Al elegir un commit, el panel derecho muestra los archivos de ese commit y el parche. El formulario de commit sigue inactivo.
 
-### 2. Grafo
+### 2. Grafo — hecho en 0.3.0
 
-Columnas en SVG a partir de `parentShas`. Sin animación y sin interacciones distintas a las del paso 1.
+Columnas en SVG a partir de `parentShas`, alineadas con las filas del historial. El clic sigue abriendo el diff.
 
 ### 3. Stage
 
@@ -64,6 +64,16 @@ Las tres herramientas dejan de devolver datos vacíos y leen la ruta (`path` o `
 ### 12. Puente con la ventana
 
 El MCP ve el repositorio que está abierto en la app.
+
+## StealThis
+
+La librería no tiene un grafo de git. Estas piezas sirven en pasos posteriores, sin copiar landings, shaders ni cursores:
+
+- `effect-skeleton-load` cuando el historial o el diff están cargando.
+- `infinite-scroll` para “Cargar más” sin un botón.
+- `copy-to-clipboard` en el sha corto.
+- `virtual-list` si el historial se vuelve largo.
+- `effect-nav-underline` en las pestañas Historial / Editor.
 
 ## Fuera de esta secuencia
 

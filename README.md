@@ -13,8 +13,9 @@ Cliente git de escritorio para macOS. Esta es la fundación: abrir un repositori
 
 ```bash
 pnpm install
-pnpm dev      # ventana de desarrollo
-pnpm build    # .app y .dmg de macOS
+pnpm dev          # ventana de desarrollo
+pnpm install-app  # recompila, instala en /Applications y abre GitHydra
+pnpm build        # solo el .app y el .dmg, sin instalar
 pnpm mcp      # servidor MCP por stdio
 pnpm check    # Biome, formato, clippy y tests
 ```

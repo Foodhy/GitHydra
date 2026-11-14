@@ -2,6 +2,8 @@ import type { BranchRef, CommitSummary } from "@githydra/contracts";
 import { useBranches } from "../../hooks/useBranches";
 import { useCommitLog } from "../../hooks/useCommitLog";
 import { formatWhen, subjectOf } from "../../lib/format";
+import { CommitGraph } from "../graph/GraphPanel";
+import { GRAPH_ROW_HEIGHT } from "../graph/layout";
 
 export function HistoryPanel({
   path,
@@ -22,17 +24,22 @@ export function HistoryPanel({
       </header>
       <div className="min-h-0 flex-1 overflow-auto">
         {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
-        <ul>
-          {commits.map((commit) => (
-            <CommitRow
-              key={commit.sha}
-              commit={commit}
-              branches={branches}
-              selected={commit.sha === selectedSha}
-              onSelect={onSelect}
-            />
-          ))}
-        </ul>
+        <div className="flex min-w-0">
+          {commits.length > 0 ? (
+            <CommitGraph commits={commits} selectedSha={selectedSha} />
+          ) : null}
+          <ul className="min-w-0 flex-1">
+            {commits.map((commit) => (
+              <CommitRow
+                key={commit.sha}
+                commit={commit}
+                branches={branches}
+                selected={commit.sha === selectedSha}
+                onSelect={onSelect}
+              />
+            ))}
+          </ul>
+        </div>
         {loading && commits.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted">Cargando…</p>
         ) : null}
@@ -77,7 +84,8 @@ function CommitRow({
       <button
         type="button"
         onClick={() => onSelect(commit.sha)}
-        className={`w-full px-3 py-2 text-left ${selected ? "bg-accent-dim" : "hover:bg-surface-overlay"}`}
+        style={{ height: GRAPH_ROW_HEIGHT }}
+        className={`flex w-full flex-col justify-center overflow-hidden px-3 text-left ${selected ? "bg-accent-dim" : "hover:bg-surface-overlay"}`}
       >
         <div className="flex items-start gap-3">
           <p className="min-w-0 flex-1 truncate text-sm" title={commit.message}>
