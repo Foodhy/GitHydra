@@ -2,7 +2,7 @@ mod error;
 
 use chrono::{DateTime, FixedOffset};
 pub use error::GitError;
-use git2::{BranchType, Repository, Sort, Status, StatusOptions};
+use git2::{BranchType, Delta, DiffOptions, Repository, Sort, Status, StatusOptions};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -57,6 +57,25 @@ pub struct WorkingTreeEntry {
 pub struct WorkingTreeStatus {
     pub entries: Vec<WorkingTreeEntry>,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDiffFile {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub kind: String,
+    pub patch: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDiff {
+    pub sha: String,
+    pub files: Vec<CommitDiffFile>,
+    pub truncated: bool,
+}
+
+const PATCH_BYTE_LIMIT: usize = 200 * 1024;
 
 pub fn open_repository(path: &str) -> Result<RepositoryInfo, GitError> {
     let repo = discover(path)?;
@@ -218,6 +237,123 @@ pub fn working_tree_status(path: &str) -> Result<WorkingTreeStatus, GitError> {
     }
 
     Ok(WorkingTreeStatus { entries })
+}
+
+pub fn commit_diff(path: &str, sha: &str) -> Result<CommitDiff, GitError> {
+    let repo = discover(path)?;
+    let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
+    let commit = repo.find_commit(oid).map_err(map_git)?;
+    let new_tree = commit.tree().map_err(map_git)?;
+    let parent_tree = if commit.parent_count() == 0 {
+        None
+    } else {
+        Some(commit.parent(0).map_err(map_git)?.tree().map_err(map_git)?)
+    };
+    let mut options = DiffOptions::new();
+    options.context_lines(3);
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&new_tree), Some(&mut options))
+        .map_err(map_git)?;
+
+    let mut files = Vec::new();
+    let mut truncated = false;
+    let mut used = 0usize;
+    for index in 0..diff.deltas().len() {
+        let (file_path, old_path, kind, binary) = delta_meta(&diff, index)?;
+        let raw = if binary {
+            "Archivo binario, sin parche de texto.\n".to_string()
+        } else {
+            patch_text(&diff, index)
+        };
+        let patch = if used >= PATCH_BYTE_LIMIT {
+            truncated = true;
+            "Parche truncado.\n".to_string()
+        } else if used + raw.len() > PATCH_BYTE_LIMIT {
+            truncated = true;
+            used = PATCH_BYTE_LIMIT;
+            let mut cut: String = raw.chars().take(PATCH_BYTE_LIMIT).collect();
+            cut.push_str("\nParche truncado.\n");
+            cut
+        } else {
+            used += raw.len();
+            raw
+        };
+        files.push(CommitDiffFile {
+            path: file_path,
+            old_path,
+            kind,
+            patch,
+        });
+    }
+
+    Ok(CommitDiff {
+        sha: oid.to_string(),
+        files,
+        truncated,
+    })
+}
+
+fn delta_meta(
+    diff: &git2::Diff,
+    index: usize,
+) -> Result<(String, Option<String>, String, bool), GitError> {
+    let Some(delta) = diff.get_delta(index) else {
+        return Err(GitError::Io("El delta del diff no existe".into()));
+    };
+    let new_path = path_to_string(delta.new_file().path());
+    let old_path = path_to_string(delta.old_file().path());
+    let file_path = if new_path.is_empty() {
+        old_path.clone()
+    } else {
+        new_path
+    };
+    let previous = if old_path.is_empty() || old_path == file_path {
+        None
+    } else {
+        Some(old_path)
+    };
+    let binary = delta.new_file().is_binary() || delta.old_file().is_binary();
+    Ok((
+        file_path,
+        previous,
+        delta_kind(delta.status()).to_string(),
+        binary,
+    ))
+}
+
+fn path_to_string(path: Option<&Path>) -> String {
+    path.and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn patch_text(diff: &git2::Diff, index: usize) -> String {
+    let Ok(Some(mut patch)) = git2::Patch::from_diff(diff, index) else {
+        return "Archivo binario, sin parche de texto.\n".to_string();
+    };
+    match patch.to_buf() {
+        Ok(buf) => {
+            let text = String::from_utf8_lossy(&buf).into_owned();
+            if text.contains("Binary files") {
+                "Archivo binario, sin parche de texto.\n".to_string()
+            } else {
+                text
+            }
+        }
+        Err(_) => "Archivo binario, sin parche de texto.\n".to_string(),
+    }
+}
+
+fn delta_kind(status: Delta) -> &'static str {
+    match status {
+        Delta::Added | Delta::Copied => "added",
+        Delta::Deleted => "deleted",
+        Delta::Renamed => "renamed",
+        Delta::Typechange => "typechange",
+        Delta::Untracked => "untracked",
+        Delta::Conflicted => "conflicted",
+        Delta::Modified | Delta::Unmodified | Delta::Ignored | Delta::Unreadable => "modified",
+    }
 }
 
 fn discover(path: &str) -> Result<Repository, GitError> {
@@ -402,5 +538,16 @@ mod tests {
         assert!(status.entries.iter().any(|entry| {
             entry.path == "notes.txt" && entry.kind == "untracked" && !entry.staged
         }));
+
+        let sha = info.head_sha.expect("head");
+        let diff = commit_diff(&info.path, &sha).expect("diff");
+        let readme = diff
+            .files
+            .iter()
+            .find(|file| file.path == "README.md")
+            .expect("readme");
+        assert_eq!(readme.kind, "modified");
+        assert!(readme.patch.contains("@@"));
+        assert!(!diff.truncated);
     }
 }

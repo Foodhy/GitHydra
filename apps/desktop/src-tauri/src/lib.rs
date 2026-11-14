@@ -24,6 +24,11 @@ fn working_tree_status(path: String) -> Result<git::WorkingTreeStatus, git::GitE
     git::working_tree_status(&path)
 }
 
+#[tauri::command]
+fn commit_diff(path: String, sha: String) -> Result<git::CommitDiff, git::GitError> {
+    git::commit_diff(&path, &sha)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -34,7 +39,8 @@ pub fn run() {
             open_repository,
             list_branches,
             list_commits,
-            working_tree_status
+            working_tree_status,
+            commit_diff
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

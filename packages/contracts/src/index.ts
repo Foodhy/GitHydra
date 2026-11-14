@@ -51,6 +51,19 @@ export interface WorkingTreeStatus {
   entries: WorkingTreeEntry[];
 }
 
+export interface CommitDiffFile {
+  path: string;
+  oldPath: string | null;
+  kind: WorkingTreeKind;
+  patch: string;
+}
+
+export interface CommitDiff {
+  sha: string;
+  files: CommitDiffFile[];
+  truncated: boolean;
+}
+
 /**
  * Puerto de lectura git. La UI y el servidor MCP hablan esta forma;
  * la implementación de escritorio vive en Rust (`git2`).
@@ -70,4 +83,5 @@ export interface GitPort {
     cursor: string | null,
   ): Promise<CommitPage>;
   workingTreeStatus(path: string): Promise<WorkingTreeStatus>;
+  commitDiff(path: string, sha: string): Promise<CommitDiff>;
 }

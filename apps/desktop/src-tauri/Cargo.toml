@@ -1,6 +1,6 @@
 [package]
 name = "githydra-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "GitHydra desktop shell"
 authors = ["GitHydra"]
 edition = "2024"

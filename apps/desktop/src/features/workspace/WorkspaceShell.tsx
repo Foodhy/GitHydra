@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { BranchPanel } from "../branches/BranchPanel";
+import { CommitDiffPanel } from "../diff/CommitDiffPanel";
 import { EditorPanel } from "../editor/EditorPanel";
 import { GraphPanel } from "../graph/GraphPanel";
 import { HistoryPanel } from "../history/HistoryPanel";
@@ -12,6 +13,16 @@ type CenterTab = "history" | "editor";
 
 export function WorkspaceShell({ path }: { path: string }) {
   const [tab, setTab] = useState<CenterTab>("history");
+  const [selectedSha, setSelectedSha] = useState<string | null>(null);
+  const [trackedPath, setTrackedPath] = useState(path);
+  if (trackedPath !== path) {
+    setTrackedPath(path);
+    setSelectedSha(null);
+  }
+
+  function toggleCommit(sha: string) {
+    setSelectedSha((current) => (current === sha ? null : sha));
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -47,7 +58,11 @@ export function WorkspaceShell({ path }: { path: string }) {
                           <GraphPanel />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <HistoryPanel path={path} />
+                          <HistoryPanel
+                            path={path}
+                            selectedSha={selectedSha}
+                            onSelect={toggleCommit}
+                          />
                         </div>
                       </div>
                     ) : (
@@ -58,7 +73,15 @@ export function WorkspaceShell({ path }: { path: string }) {
               </Panel>
               <PanelResizeHandle className="w-px bg-line" />
               <Panel defaultSize={28} minSize={18} className="min-w-0">
-                <StagingPanel path={path} />
+                {selectedSha ? (
+                  <CommitDiffPanel
+                    path={path}
+                    sha={selectedSha}
+                    onClear={() => setSelectedSha(null)}
+                  />
+                ) : (
+                  <StagingPanel path={path} />
+                )}
               </Panel>
             </PanelGroup>
           </Panel>

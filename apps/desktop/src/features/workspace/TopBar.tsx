@@ -10,10 +10,12 @@ import {
   Undo2,
 } from "lucide-react";
 import { ToolButton } from "../../components/ToolButton";
+import { useAppVersion } from "../../hooks/useAppVersion";
 import { useRepoSession } from "../../stores/repo-session";
 
 export function TopBar() {
   const info = useRepoSession((state) => state.info);
+  const version = useAppVersion();
   const branch = info?.isDetached
     ? "HEAD suelto"
     : (info?.currentBranch ?? "sin rama");
@@ -52,9 +54,7 @@ export function TopBar() {
           <SquareTerminal size={16} />
         </ToolButton>
       </div>
-      <span className="text-[11px] tracking-wide text-muted uppercase">
-        GitHydra
-      </span>
+      <span className="font-mono text-[11px] text-muted">v{version}</span>
     </header>
   );
 }

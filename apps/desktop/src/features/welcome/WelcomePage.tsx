@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, GitBranchPlus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useAppVersion } from "../../hooks/useAppVersion";
 import { formatWhen } from "../../lib/format";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
@@ -19,6 +20,7 @@ export function WelcomePage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [desktopReady, setDesktopReady] = useState(true);
+  const version = useAppVersion();
 
   useEffect(() => {
     readRecents()
@@ -60,7 +62,7 @@ export function WelcomePage() {
     <main className="flex h-full items-center justify-center bg-surface px-6">
       <div className="w-full max-w-xl">
         <p className="text-xs tracking-[0.2em] text-accent uppercase">
-          GitHydra
+          GitHydra <span className="font-mono tracking-normal">v{version}</span>
         </p>
         <h1 className="mt-2 text-3xl font-semibold">Abrir un repositorio</h1>
         <p className="mt-2 text-sm text-muted">

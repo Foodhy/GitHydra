@@ -1,5 +1,6 @@
 import type {
   BranchRef,
+  CommitDiff,
   CommitPage,
   GitPort,
   RepositoryInfo,
@@ -19,5 +20,8 @@ export const tauriGit: GitPort = {
   },
   workingTreeStatus(path) {
     return invoke<WorkingTreeStatus>("working_tree_status", { path });
+  },
+  commitDiff(path, sha) {
+    return invoke<CommitDiff>("commit_diff", { path, sha });
   },
 };

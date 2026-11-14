@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-El paso activo es el **1**.
+El paso activo es el **2**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.2.0`.
 
 ## Hecho — fase 0
 
@@ -17,9 +17,9 @@ Ya está en el primer commit:
 
 ## Pasos
 
-### 1. Diff de solo lectura
+### 1. Diff de solo lectura — hecho en 0.2.0
 
-Al elegir un commit, el panel derecho muestra los archivos de ese commit y el parche. El formulario de commit sigue inactivo. Sirve para comprobar que la selección y `git2` conviven antes de dibujar el grafo.
+Al elegir un commit, el panel derecho muestra los archivos de ese commit y el parche. El formulario de commit sigue inactivo.
 
 ### 2. Grafo
 

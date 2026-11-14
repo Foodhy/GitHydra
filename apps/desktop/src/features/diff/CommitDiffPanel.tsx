@@ -1,0 +1,141 @@
+import type { CommitDiff, CommitDiffFile } from "@githydra/contracts";
+import { useEffect, useState } from "react";
+import { toGitClientError } from "../../lib/git/errors";
+import { tauriGit } from "../../lib/git/tauri-git-adapter";
+
+export function CommitDiffPanel({
+  path,
+  sha,
+  onClear,
+}: {
+  path: string;
+  sha: string;
+  onClear: () => void;
+}) {
+  const [diff, setDiff] = useState<CommitDiff | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDiff(null);
+    setError(null);
+    tauriGit
+      .commitDiff(path, sha)
+      .then((next) => {
+        if (cancelled) {
+          return;
+        }
+        setDiff(next);
+        setSelected(next.files[0]?.path ?? null);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setError(toGitClientError(reason).message);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, sha]);
+
+  const file = diff?.files.find((entry) => entry.path === selected) ?? null;
+
+  return (
+    <aside className="flex h-full flex-col bg-surface-raised">
+      <header className="flex items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-muted">
+        <span className="truncate font-mono">{sha.slice(0, 7)}</span>
+        <button type="button" onClick={onClear} className="text-accent">
+          Ver cambios
+        </button>
+      </header>
+      {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
+      {!diff && !error ? (
+        <p className="px-3 py-2 text-xs text-muted">Leyendo parche…</p>
+      ) : null}
+      {diff ? (
+        <>
+          <ul className="max-h-40 overflow-auto border-b border-line py-1">
+            {diff.files.length === 0 ? (
+              <li className="px-3 py-1 text-xs text-muted">Sin archivos</li>
+            ) : (
+              diff.files.map((entry) => (
+                <li key={`${entry.kind}:${entry.path}`}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(entry.path)}
+                    className={`flex w-full items-center gap-2 px-3 py-0.5 text-left font-mono text-xs ${
+                      entry.path === selected ? "bg-surface-overlay" : ""
+                    }`}
+                  >
+                    <span className="w-4 text-warn">
+                      {kindMark(entry.kind)}
+                    </span>
+                    <span className="truncate" title={entry.path}>
+                      {entry.oldPath
+                        ? `${entry.oldPath} → ${entry.path}`
+                        : entry.path}
+                    </span>
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+          {diff.truncated ? (
+            <p className="px-3 py-1 text-[11px] text-warn">
+              El parche supera el límite y está truncado.
+            </p>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            {file ? <PatchView file={file} /> : null}
+          </div>
+        </>
+      ) : null}
+    </aside>
+  );
+}
+
+function PatchView({ file }: { file: CommitDiffFile }) {
+  return (
+    <pre className="font-mono text-[11px] leading-5 whitespace-pre-wrap">
+      {file.patch.split("\n").map((line, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: las líneas repetidas de un parche se distinguen por su posición
+        <div key={index} className={lineColor(line)}>
+          {line.length === 0 ? " " : line}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
+function lineColor(line: string): string {
+  if (line.startsWith("+") && !line.startsWith("+++")) {
+    return "text-accent";
+  }
+  if (line.startsWith("-") && !line.startsWith("---")) {
+    return "text-warn";
+  }
+  if (line.startsWith("@@")) {
+    return "text-graph-edge";
+  }
+  return "text-muted";
+}
+
+function kindMark(kind: CommitDiffFile["kind"]): string {
+  switch (kind) {
+    case "added":
+      return "A";
+    case "modified":
+      return "M";
+    case "deleted":
+      return "D";
+    case "renamed":
+      return "R";
+    case "untracked":
+      return "?";
+    case "conflicted":
+      return "U";
+    case "typechange":
+      return "T";
+  }
+}
