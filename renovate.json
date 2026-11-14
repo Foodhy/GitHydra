@@ -1,0 +1,19 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "groupName": "tauri",
+      "matchPackageNames": ["/^@tauri-apps//", "/^tauri/"]
+    },
+    {
+      "groupName": "react",
+      "matchPackageNames": [
+        "/^react$/",
+        "/^react-dom$/",
+        "/^@types/react/",
+        "/^@types/react-dom/"
+      ]
+    }
+  ]
+}

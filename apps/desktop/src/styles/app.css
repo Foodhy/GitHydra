@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #12141a;
+  --color-surface-raised: #1b1e27;
+  --color-surface-overlay: #232733;
+  --color-line: #2e3442;
+  --color-text: #e7e9ef;
+  --color-muted: #8d95a8;
+  --color-accent: #3ee0b0;
+  --color-accent-dim: #163f36;
+  --color-graph-edge: #4c9aff;
+  --color-warn: #e6b35a;
+  --font-sans: "SF Pro Text", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+}

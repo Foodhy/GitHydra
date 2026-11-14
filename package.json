@@ -1,0 +1,19 @@
+{
+  "name": "githydra",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "dev": "pnpm --filter @githydra/desktop tauri dev",
+    "build": "pnpm --filter @githydra/desktop tauri build",
+    "mcp": "pnpm --filter @githydra/mcp build && pnpm --filter @githydra/mcp start",
+    "check": "biome check . && pnpm --filter @githydra/desktop check:rust",
+    "format": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.0"
+  }
+}
