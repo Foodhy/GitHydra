@@ -1,25 +1,27 @@
 # GitHydra
 
-Cliente git de escritorio para macOS. Esta es la fundación: abrir un repositorio, ver ramas e historial, y el espacio reservado para el grafo, el stage, la terminal y el editor.
+![GitHydra — native macOS git client with MCP](./assets/hero.png)
 
-## Requisitos
+Desktop Git client for macOS. This release is the foundation: open a repository, browse branches and history, and the shell for the graph, staging, terminal, and editor.
+
+## Requirements
 
 - Node.js 22+
 - pnpm 11
-- Rust stable (rustfmt y clippy)
-- CMake (lo usa `git2` / libgit2 al compilar)
+- Rust stable (rustfmt and clippy)
+- CMake (required by `git2` / libgit2 at compile time)
 
-## Comandos
+## Commands
 
 ```bash
 pnpm install
-pnpm dev          # ventana de desarrollo
-pnpm install-app  # recompila, instala en /Applications y abre GitHydra
-pnpm build        # solo el .app y el .dmg, sin instalar
-pnpm mcp      # servidor MCP por stdio
-pnpm check    # Biome, formato, clippy y tests
+pnpm dev          # development window
+pnpm install-app  # rebuild, install to /Applications, and open GitHydra
+pnpm build        # .app and .dmg only, no install
+pnpm mcp          # MCP server over stdio
+pnpm check        # Biome, format, clippy, and tests
 ```
 
-La firma de Apple para distribuir el `.app` fuera de esta máquina no forma parte de esta fase.
+Apple code signing for distributing the `.app` off this machine is out of scope for this phase.
 
-El orden de construcción está en [docs/ROADMAP.md](docs/ROADMAP.md). Las capas están en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) y el MCP en [packages/mcp/README.md](packages/mcp/README.md).
+Build order is in [docs/ROADMAP.md](docs/ROADMAP.md). Layering is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); MCP in [packages/mcp/README.md](packages/mcp/README.md).
