@@ -6,8 +6,11 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { SettingsPage } from "../features/settings/SettingsPage";
 import { WelcomePage } from "../features/welcome/WelcomePage";
 import { WorkspacePage } from "../features/workspace/WorkspacePage";
+import { applyAppearance, readAppearance } from "../lib/appearance";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -29,7 +32,17 @@ const repoRoute = createRoute({
   component: WorkspacePage,
 });
 
-const routeTree = rootRoute.addChildren([welcomeRoute, repoRoute]);
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
+const routeTree = rootRoute.addChildren([
+  welcomeRoute,
+  repoRoute,
+  settingsRoute,
+]);
 
 export const router = createRouter({
   routeTree,
@@ -43,5 +56,15 @@ declare module "@tanstack/react-router" {
 }
 
 export function AppRouter() {
+  useEffect(() => {
+    readAppearance()
+      .then((appearance) => {
+        applyAppearance(appearance.style, appearance.accent);
+      })
+      .catch(() => {
+        applyAppearance("hydra", "#3ee0b0");
+      });
+  }, []);
+
   return <RouterProvider router={router} />;
 }

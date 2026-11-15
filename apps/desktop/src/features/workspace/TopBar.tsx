@@ -7,6 +7,7 @@ import {
   FolderGit2,
   GitBranch,
   Redo2,
+  Settings,
   SquareTerminal,
   Undo2,
 } from "lucide-react";
@@ -108,6 +109,14 @@ export function TopBar({
           <SquareTerminal size={16} />
         </ToolButton>
       </div>
+      <Link
+        to="/settings"
+        className="rounded-md p-1.5 text-muted hover:bg-surface-overlay hover:text-text"
+        title="Preferencias"
+      >
+        <Settings size={16} />
+        <span className="sr-only">Preferencias</span>
+      </Link>
       <span className="font-mono text-[11px] text-muted">v{version}</span>
     </header>
   );

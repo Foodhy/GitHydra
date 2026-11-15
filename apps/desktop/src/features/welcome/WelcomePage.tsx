@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, GitBranchPlus } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -6,6 +6,7 @@ import { useAppVersion } from "../../hooks/useAppVersion";
 import { formatWhen } from "../../lib/format";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { clearOpenRepo } from "../../lib/open-session";
 import {
   type RecentRepo,
   readRecents,
@@ -25,6 +26,7 @@ export function WelcomePage() {
   const version = useAppVersion();
 
   useEffect(() => {
+    clearOpenRepo().catch(() => undefined);
     readRecents()
       .then(setRecents)
       .catch(() => setDesktopReady(false));
@@ -96,7 +98,12 @@ export function WelcomePage() {
         <p className="text-xs tracking-[0.2em] text-accent uppercase">
           GitHydra <span className="font-mono tracking-normal">v{version}</span>
         </p>
-        <h1 className="mt-2 text-3xl font-semibold">Abrir un repositorio</h1>
+        <div className="mt-2 flex items-end justify-between gap-3">
+          <h1 className="text-3xl font-semibold">Abrir un repositorio</h1>
+          <Link to="/settings" className="text-xs text-accent">
+            Preferencias
+          </Link>
+        </div>
         <p className="mt-2 text-sm text-muted">
           Elige una carpeta git local o clona una URL.
         </p>

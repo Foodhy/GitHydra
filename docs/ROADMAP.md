@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-El paso activo es el **11**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.6.0`.
+No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.7.0`.
 
 ## Hecho — fase 0
 
@@ -57,13 +57,17 @@ Ya está en el primer commit:
 
 - [x] El tab Editor abre el archivo seleccionado en el paso 1. Sigue en solo lectura.
 
-### 11. MCP que lee git
+### 11. MCP que lee git — hecho en 0.7.0
 
-- [ ] Las tres herramientas dejan de devolver datos vacíos y leen la ruta (`path` o `GITHYDRA_REPO`). Siguen siendo un proceso aparte.
+- [x] Las tres herramientas dejan de devolver datos vacíos y leen la ruta (`path` o `GITHYDRA_REPO`). Siguen siendo un proceso aparte.
 
-### 12. Puente con la ventana
+### 12. Puente con la ventana — hecho en 0.7.0
 
-- [ ] El MCP ve el repositorio que está abierto en la app.
+- [x] El MCP ve el repositorio que está abierto en la app.
+
+### 13. Preferencias visuales — hecho en 0.7.0
+
+- [x] Seis estilos, color de acento y una vista previa. La elección se guarda y se vuelve a leer.
 
 ## StealThis
 

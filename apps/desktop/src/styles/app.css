@@ -39,4 +39,21 @@
   textarea {
     font: inherit;
   }
+
+  html[data-style] button,
+  html[data-style] input,
+  html[data-style] textarea {
+    border-radius: var(--radius-ui);
+  }
+
+  html[data-style="fino"] {
+    font-size: 13.5px;
+    letter-spacing: 0.01em;
+  }
+
+  html[data-style="ultra"] button,
+  html[data-style="ultra"] input,
+  html[data-style="ultra"] textarea {
+    border-radius: 0;
+  }
 }

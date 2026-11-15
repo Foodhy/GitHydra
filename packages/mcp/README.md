@@ -1,16 +1,20 @@
 # @githydra/mcp
 
-Servidor MCP por stdio. En esta fase las herramientas devuelven los DTO de `@githydra/contracts` sin leer git.
+Servidor MCP por stdio. Lee el repositorio con `git` y devuelve los DTO de `@githydra/contracts`.
 
-| Herramienta             | Respuesta                                    |
-| ----------------------- | -------------------------------------------- |
-| `githydra_repo_info`    | `RepositoryInfo` con la ruta y la rama vacía |
-| `githydra_list_commits` | `CommitPage` vacía                           |
-| `githydra_working_tree` | `WorkingTreeStatus` vacío                    |
+| Herramienta             | Respuesta           |
+| ----------------------- | ------------------- |
+| `githydra_repo_info`    | `RepositoryInfo`    |
+| `githydra_list_commits` | `CommitPage`        |
+| `githydra_working_tree` | `WorkingTreeStatus` |
 
-La ruta sale del argumento `path` o de `GITHYDRA_REPO`.
+La ruta se elige en este orden:
 
-Desde la raíz del repo:
+1. El argumento `path`.
+2. La variable `GITHYDRA_REPO`.
+3. El repositorio abierto en la ventana, guardado en `session.json` dentro de Application Support de `com.githydra.app`.
+
+El proceso no está embebido en la app. Desde la raíz del repo:
 
 ```bash
 pnpm mcp
@@ -23,13 +27,10 @@ Ejemplo para Cursor (`.cursor/mcp.json`), con la ruta real del monorepo:
   "mcpServers": {
     "githydra": {
       "command": "pnpm",
-      "args": ["--dir", "/ruta/absoluta/GitHydra", "mcp"],
-      "env": {
-        "GITHYDRA_REPO": "/ruta/absoluta/de/un/repo"
-      }
+      "args": ["--dir", "/ruta/absoluta/GitHydra", "mcp"]
     }
   }
 }
 ```
 
-El proceso no está embebido en la app Tauri. El puente con el repositorio abierto en el escritorio queda para una fase posterior.
+Si la ventana tiene un repositorio abierto, las herramientas lo usan sin `GITHYDRA_REPO`.

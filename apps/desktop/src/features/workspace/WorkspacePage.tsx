@@ -2,6 +2,7 @@ import { getRouteApi } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { rememberOpenRepo } from "../../lib/open-session";
 import { rememberRecent } from "../../lib/recents";
 import { useRepoSession } from "../../stores/repo-session";
 import { WorkspaceShell } from "./WorkspaceShell";
@@ -28,6 +29,7 @@ export function WorkspacePage() {
         setInfo(repo);
         setOpenedPath(repo.path);
         await rememberRecent(repo);
+        await rememberOpenRepo(repo.path);
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
