@@ -3,6 +3,8 @@ import { useState } from "react";
 import { useWorkingTree } from "../../hooks/useWorkingTree";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { runOperation } from "../../lib/run-operation";
+import { useOperation } from "../../stores/operation";
 import type { WorkFile } from "../diff/WorkDiffPanel";
 
 export function StagingPanel({
@@ -10,17 +12,23 @@ export function StagingPanel({
   revision,
   selected,
   onSelect,
+  onOpenFile,
   onRepositoryChanged,
 }: {
   path: string;
   revision: number;
   selected: WorkFile | null;
   onSelect: (file: WorkFile) => void;
+  onOpenFile: (file: string) => void;
   onRepositoryChanged: () => Promise<void>;
 }) {
-  const { entries, error, loading, reload } = useWorkingTree(path, revision);
+  const { entries, error, loading, refreshing, reload } = useWorkingTree(
+    path,
+    revision,
+  );
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const running = useOperation((state) => state.running);
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [query, setQuery] = useState("");
@@ -60,23 +68,22 @@ export function StagingPanel({
     }
   }
 
-  async function confirmCommit() {
+  function confirmCommit() {
     const nextSummary = summary.trim();
-    if (!nextSummary || busy) {
+    const nextDescription = description.trim();
+    if (!nextSummary || busy || running) {
       return;
     }
-    setBusy(true);
-    setActionError(null);
-    try {
-      await tauriGit.createCommit(path, nextSummary, description.trim());
-      setSummary("");
-      setDescription("");
-      await onRepositoryChanged();
-    } catch (reason: unknown) {
-      setActionError(toGitClientError(reason).message);
-    } finally {
-      setBusy(false);
-    }
+    void runOperation(
+      "other",
+      "Confirmando",
+      async () => {
+        await tauriGit.createCommit(path, nextSummary, nextDescription);
+        setSummary("");
+        setDescription("");
+      },
+      onRepositoryChanged,
+    );
   }
 
   return (
@@ -85,7 +92,9 @@ export function StagingPanel({
         <p className="text-xs text-muted">
           {loading && entries.length === 0
             ? "Leyendo cambios…"
-            : `${entries.length} cambio${entries.length === 1 ? "" : "s"} en el árbol`}
+            : refreshing
+              ? "Actualizando cambios…"
+              : `${entries.length} cambio${entries.length === 1 ? "" : "s"} en el árbol`}
         </p>
         <input
           value={query}
@@ -113,6 +122,7 @@ export function StagingPanel({
             }))
           }
           onSelect={onSelect}
+          onOpenFile={onOpenFile}
           onMove={(filePaths) => {
             void move(filePaths, false);
           }}
@@ -131,6 +141,7 @@ export function StagingPanel({
             }))
           }
           onSelect={onSelect}
+          onOpenFile={onOpenFile}
           onMove={(filePaths) => {
             void move(filePaths, true);
           }}
@@ -145,14 +156,14 @@ export function StagingPanel({
       >
         <input
           value={summary}
-          disabled={busy}
+          disabled={busy || running}
           placeholder="Resumen del commit"
           onChange={(event) => setSummary(event.target.value)}
           className="mb-2 w-full rounded border border-line bg-surface px-2 py-1.5 text-sm disabled:text-muted"
         />
         <textarea
           value={description}
-          disabled={busy}
+          disabled={busy || running}
           rows={3}
           placeholder="Descripción"
           onChange={(event) => setDescription(event.target.value)}
@@ -164,7 +175,7 @@ export function StagingPanel({
         </label>
         <button
           type="submit"
-          disabled={busy || summary.trim().length === 0}
+          disabled={busy || running || summary.trim().length === 0}
           className="w-full rounded bg-accent px-3 py-2 text-sm font-medium text-surface disabled:bg-accent/40"
         >
           Confirmar
@@ -183,6 +194,7 @@ function FileGroup({
   selected,
   onToggleFolder,
   onSelect,
+  onOpenFile,
   onMove,
 }: {
   title: string;
@@ -193,6 +205,7 @@ function FileGroup({
   selected: WorkFile | null;
   onToggleFolder: (folder: string) => void;
   onSelect: (file: WorkFile) => void;
+  onOpenFile: (file: string) => void;
   onMove: (paths: string[]) => void;
 }) {
   const tree = groupFiles(entries);
@@ -226,6 +239,7 @@ function FileGroup({
               busy={busy}
               selected={selected}
               onSelect={onSelect}
+              onOpenFile={onOpenFile}
               onMove={onMove}
             />
           ))}
@@ -253,6 +267,7 @@ function FileGroup({
                         indent
                         selected={selected}
                         onSelect={onSelect}
+                        onOpenFile={onOpenFile}
                         onMove={onMove}
                       />
                     ))
@@ -273,6 +288,7 @@ function FileRow({
   indent = false,
   selected,
   onSelect,
+  onOpenFile,
   onMove,
 }: {
   entry: WorkingTreeEntry;
@@ -281,6 +297,7 @@ function FileRow({
   indent?: boolean;
   selected: WorkFile | null;
   onSelect: (file: WorkFile) => void;
+  onOpenFile: (file: string) => void;
   onMove: (paths: string[]) => void;
 }) {
   const active =
@@ -292,7 +309,9 @@ function FileRow({
     <li className="flex items-center">
       <button
         type="button"
+        title={`${entry.path} · doble clic para editar`}
         onClick={() => onSelect({ path: entry.path, staged: entry.staged })}
+        onDoubleClick={() => onOpenFile(entry.path)}
         className={`flex h-7 min-w-0 flex-1 items-center gap-2 text-left font-mono text-xs hover:bg-surface-overlay ${
           indent ? "pr-2 pl-8" : "px-3"
         } ${active ? "bg-surface-overlay" : ""}`}

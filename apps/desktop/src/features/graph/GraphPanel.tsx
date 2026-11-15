@@ -13,11 +13,13 @@ export function CommitGraph({
   commits,
   branches,
   selectedSha,
+  onSelect,
   onOpen,
 }: {
   commits: GraphCommit[];
   branches: BranchRef[];
   selectedSha: string | null;
+  onSelect: (sha: string) => void;
   onOpen: (sha: string, event: MouseEvent) => void;
 }) {
   const layout = layoutCommits(commits);
@@ -74,7 +76,11 @@ export function CommitGraph({
             r={node.sha === selectedSha ? 5.5 : 4.5}
             fill={color}
             className="cursor-pointer"
-            onClick={(event) => onOpen(node.sha, event)}
+            onClick={() => onSelect(node.sha)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onOpen(node.sha, event);
+            }}
           >
             <title>{node.sha.slice(0, 7)}</title>
           </circle>

@@ -1,14 +1,40 @@
 mod git;
 mod pty;
+mod watch;
+
+fn in_repo<T>(
+    path: &str,
+    action: impl FnOnce() -> Result<T, git::GitError>,
+) -> Result<T, git::GitError> {
+    git::with_repo(path, action)
+}
+
+fn networked<T>(
+    app: tauri::AppHandle,
+    path: &str,
+    action: impl FnOnce() -> Result<T, git::GitError>,
+) -> Result<T, git::GitError> {
+    in_repo(path, || {
+        let activity = git::activity::begin(app);
+        let result = action();
+        let result = if git::activity::cancelled() {
+            Err(git::GitError::Io("Cancelado".into()))
+        } else {
+            result
+        };
+        drop(activity);
+        result
+    })
+}
 
 #[tauri::command]
 fn open_repository(path: String) -> Result<git::RepositoryInfo, git::GitError> {
-    git::open_repository(&path)
+    in_repo(&path, || git::open_repository(&path))
 }
 
 #[tauri::command]
 fn list_branches(path: String) -> Result<Vec<git::BranchRef>, git::GitError> {
-    git::list_branches(&path)
+    in_repo(&path, || git::list_branches(&path))
 }
 
 #[tauri::command]
@@ -17,12 +43,12 @@ fn list_commits(
     limit: u32,
     cursor: Option<String>,
 ) -> Result<git::CommitPage, git::GitError> {
-    git::list_commits(&path, limit, cursor)
+    in_repo(&path, || git::list_commits(&path, limit, cursor))
 }
 
 #[tauri::command]
 fn working_tree_status(path: String) -> Result<git::WorkingTreeStatus, git::GitError> {
-    git::working_tree_status(&path)
+    in_repo(&path, || git::working_tree_status(&path))
 }
 
 #[tauri::command]
@@ -31,57 +57,57 @@ fn working_tree_diff(
     file: String,
     staged: bool,
 ) -> Result<git::WorkDiff, git::GitError> {
-    git::working_tree_diff(&path, &file, staged)
+    in_repo(&path, || git::working_tree_diff(&path, &file, staged))
 }
 
 #[tauri::command]
 fn commit_diff(path: String, sha: String) -> Result<git::CommitDiff, git::GitError> {
-    git::commit_diff(&path, &sha)
+    in_repo(&path, || git::commit_diff(&path, &sha))
 }
 
 #[tauri::command]
 fn stage_paths(path: String, paths: Vec<String>) -> Result<(), git::GitError> {
-    git::stage_paths(&path, &paths)
+    in_repo(&path, || git::stage_paths(&path, &paths))
 }
 
 #[tauri::command]
 fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), git::GitError> {
-    git::unstage_paths(&path, &paths)
+    in_repo(&path, || git::unstage_paths(&path, &paths))
 }
 
 #[tauri::command]
 fn create_commit(path: String, summary: String, description: String) -> Result<(), git::GitError> {
-    git::create_commit(&path, &summary, &description)
+    in_repo(&path, || git::create_commit(&path, &summary, &description))
 }
 
 #[tauri::command]
 fn checkout_branch(path: String, name: String) -> Result<(), git::GitError> {
-    git::checkout_branch(&path, &name)
+    in_repo(&path, || git::checkout_branch(&path, &name))
 }
 
 #[tauri::command]
 fn create_branch(path: String, name: String) -> Result<(), git::GitError> {
-    git::create_branch(&path, &name)
+    in_repo(&path, || git::create_branch(&path, &name))
 }
 
 #[tauri::command]
 fn create_branch_at(path: String, name: String, sha: String) -> Result<(), git::GitError> {
-    git::create_branch_at(&path, &name, &sha)
+    in_repo(&path, || git::create_branch_at(&path, &name, &sha))
 }
 
 #[tauri::command]
 fn delete_branch(path: String, name: String) -> Result<(), git::GitError> {
-    git::delete_branch(&path, &name)
+    in_repo(&path, || git::delete_branch(&path, &name))
 }
 
 #[tauri::command]
 fn rename_branch(path: String, name: String, next_name: String) -> Result<(), git::GitError> {
-    git::rename_branch(&path, &name, &next_name)
+    in_repo(&path, || git::rename_branch(&path, &name, &next_name))
 }
 
 #[tauri::command]
 fn set_upstream(path: String, name: String, upstream: String) -> Result<(), git::GitError> {
-    git::set_upstream(&path, &name, &upstream)
+    in_repo(&path, || git::set_upstream(&path, &name, &upstream))
 }
 
 #[tauri::command]
@@ -91,37 +117,82 @@ fn create_tag(
     name: String,
     message: String,
 ) -> Result<(), git::GitError> {
-    git::create_tag(&path, &sha, &name, &message)
+    in_repo(&path, || git::create_tag(&path, &sha, &name, &message))
 }
 
 #[tauri::command]
 fn checkout_commit(path: String, sha: String) -> Result<(), git::GitError> {
-    git::checkout_commit(&path, &sha)
+    in_repo(&path, || git::checkout_commit(&path, &sha))
 }
 
 #[tauri::command]
-fn fetch(path: String) -> Result<(), git::GitError> {
-    git::fetch(&path)
+fn fetch(app: tauri::AppHandle, path: String) -> Result<(), git::GitError> {
+    networked(app, &path, || git::fetch(&path))
 }
 
 #[tauri::command]
-fn pull(path: String) -> Result<(), git::GitError> {
-    git::pull(&path)
+fn pull(app: tauri::AppHandle, path: String) -> Result<(), git::GitError> {
+    networked(app, &path, || git::pull(&path))
 }
 
 #[tauri::command]
-fn push(path: String) -> Result<(), git::GitError> {
-    git::push(&path)
+fn push(app: tauri::AppHandle, path: String) -> Result<(), git::GitError> {
+    networked(app, &path, || git::push(&path))
 }
 
 #[tauri::command]
-fn clone_repository(url: String, directory: String) -> Result<git::RepositoryInfo, git::GitError> {
-    git::clone_repository(&url, &directory)
+fn clone_repository(
+    app: tauri::AppHandle,
+    url: String,
+    directory: String,
+) -> Result<git::RepositoryInfo, git::GitError> {
+    networked(app, &directory, || git::clone_repository(&url, &directory))
+}
+
+#[tauri::command]
+fn init_repository(directory: String) -> Result<git::RepositoryInfo, git::GitError> {
+    in_repo(&directory, || git::init_repository(&directory))
 }
 
 #[tauri::command]
 fn read_commit_file(path: String, sha: String, file: String) -> Result<String, git::GitError> {
-    git::read_commit_file(&path, &sha, &file)
+    in_repo(&path, || git::read_commit_file(&path, &sha, &file))
+}
+
+#[tauri::command]
+fn list_workdir(
+    path: String,
+    directory: String,
+) -> Result<Vec<git::files::WorkdirEntry>, git::GitError> {
+    in_repo(&path, || git::files::list_workdir(&path, &directory))
+}
+
+#[tauri::command]
+fn read_workdir_file(path: String, file: String) -> Result<git::files::WorkdirFile, git::GitError> {
+    in_repo(&path, || git::files::read_workdir_file(&path, &file))
+}
+
+#[tauri::command]
+fn write_workdir_file(path: String, file: String, contents: String) -> Result<(), git::GitError> {
+    in_repo(&path, || {
+        git::files::write_workdir_file(&path, &file, &contents)
+    })
+}
+
+#[tauri::command]
+fn search_workdir(path: String, query: String) -> Result<Vec<String>, git::GitError> {
+    in_repo(&path, || git::files::search_workdir(&path, &query))
+}
+
+#[tauri::command]
+fn cancel_git_operation() {
+    git::activity::cancel();
+}
+
+#[tauri::command]
+fn watch_repository(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let roots = in_repo(&path, || git::watch_roots(&path)).map_err(|err| err.to_string())?;
+    watch::start(app, roots)
 }
 
 #[tauri::command]
@@ -195,7 +266,14 @@ pub fn run() {
             pull,
             push,
             clone_repository,
+            init_repository,
             read_commit_file,
+            list_workdir,
+            read_workdir_file,
+            write_workdir_file,
+            search_workdir,
+            cancel_git_operation,
+            watch_repository,
             pty_open,
             pty_write,
             pty_resize,

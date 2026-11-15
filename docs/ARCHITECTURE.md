@@ -60,7 +60,7 @@ Rust serializa los fallos como `CODE|mensaje`. Códigos: `NOT_A_REPO`, `IO_ERROR
 Desde la raíz del monorepo:
 
 - `pnpm dev` — ventana de desarrollo.
-- `pnpm build` — app de macOS (`.app` / `.dmg`).
+- `pnpm build` — app de macOS (`.app` / `.dmg`). El procedimiento del disco está en [DMG.md](DMG.md).
 - `pnpm mcp` — servidor MCP por stdio.
 - `pnpm check` — Biome, rustfmt, clippy y tests de Rust.
 

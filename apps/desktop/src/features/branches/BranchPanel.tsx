@@ -3,8 +3,9 @@ import { Folder, GitBranch, Plus } from "lucide-react";
 import { type MouseEvent, useState } from "react";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useBranches } from "../../hooks/useBranches";
-import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { type OperationKind, runOperation } from "../../lib/run-operation";
+import { useOperation } from "../../stores/operation";
 
 export function BranchPanel({
   path,
@@ -15,9 +16,9 @@ export function BranchPanel({
   revision: number;
   onRepositoryChanged: () => Promise<void>;
 }) {
-  const { branches, error, loading } = useBranches(path, revision);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { branches, error, loading, refreshing } = useBranches(path, revision);
+  const running = useOperation((state) => state.running);
+  const notice = useOperation((state) => state.notice);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
@@ -27,6 +28,8 @@ export function BranchPanel({
     y: number;
     items: MenuItem[];
   } | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const selected = preferredKey(branches, selectedKey);
   const needle = query.trim().toLowerCase();
   const visible = branches.filter((branch) =>
     shortName(branch).toLowerCase().includes(needle),
@@ -44,20 +47,12 @@ export function BranchPanel({
     ),
   ];
 
-  async function run(action: () => Promise<void>) {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setActionError(null);
-    try {
-      await action();
-      await onRepositoryChanged();
-    } catch (reason: unknown) {
-      setActionError(toGitClientError(reason).message);
-    } finally {
-      setBusy(false);
-    }
+  function run(
+    kind: OperationKind,
+    label: string,
+    action: () => Promise<void>,
+  ) {
+    void runOperation(kind, label, action, onRepositoryChanged);
   }
 
   function toggleFolder(key: string) {
@@ -71,7 +66,12 @@ export function BranchPanel({
     return folded[key] === true;
   }
 
+  function selectBranch(branch: BranchRef) {
+    setSelectedKey(branchKey(branch));
+  }
+
   function openMenu(branch: BranchRef, event: MouseEvent) {
+    selectBranch(branch);
     setMenu({
       x: event.clientX,
       y: event.clientY,
@@ -107,23 +107,28 @@ export function BranchPanel({
             if (!nextName) {
               return;
             }
-            void run(async () => {
-              await tauriGit.createBranch(path, nextName);
-              setName("");
-              setCreating(false);
-            });
+            void runOperation(
+              "other",
+              "Creando rama",
+              async () => {
+                await tauriGit.createBranch(path, nextName);
+                setName("");
+                setCreating(false);
+              },
+              onRepositoryChanged,
+            );
           }}
         >
           <input
             value={name}
-            disabled={busy}
+            disabled={running}
             placeholder="Nueva rama"
             onChange={(event) => setName(event.target.value)}
             className="min-w-0 flex-1 rounded border border-line bg-surface px-2 py-1 text-xs"
           />
           <button
             type="submit"
-            disabled={busy || name.trim().length === 0}
+            disabled={running || name.trim().length === 0}
             className="rounded px-2 py-1 text-xs text-accent disabled:text-muted"
           >
             Crear
@@ -135,8 +140,11 @@ export function BranchPanel({
           <p className="px-3 text-xs text-muted">Cargando…</p>
         ) : null}
         {error ? <p className="px-3 text-xs text-warn">{error}</p> : null}
-        {actionError ? (
-          <p className="px-3 text-xs text-warn">{actionError}</p>
+        {notice && notice !== "Cancelado" ? (
+          <p className="px-3 text-xs text-warn">{notice}</p>
+        ) : null}
+        {refreshing ? (
+          <p className="px-3 text-[11px] text-muted">Actualizando ramas…</p>
         ) : null}
         {local.length > 0 ? (
           <BranchGroup
@@ -148,6 +156,8 @@ export function BranchPanel({
               setFolded((current) => ({ ...current, Local: !current.Local }))
             }
             onToggleFolder={(folder) => toggleFolder(`Local/${folder}`)}
+            selectedKey={selected}
+            onSelect={selectBranch}
             onOpen={openMenu}
           />
         ) : null}
@@ -165,6 +175,8 @@ export function BranchPanel({
               }))
             }
             onToggleFolder={(folder) => toggleFolder(`${remote}/${folder}`)}
+            selectedKey={selected}
+            onSelect={selectBranch}
             onOpen={openMenu}
           />
         ))}
@@ -191,62 +203,70 @@ export function BranchPanel({
       {
         id: "checkout",
         label: "Checkout",
-        disabled: !local || branch.isHead || busy,
+        disabled: !local || branch.isHead || running,
         onSelect: () => {
-          void run(() => tauriGit.checkoutBranch(path, branch.name));
+          void run("checkout", `Cambiando a ${shortName(branch)}`, () =>
+            tauriGit.checkoutBranch(path, branch.name),
+          );
         },
       },
       {
         id: "pull",
         label: "Pull",
-        disabled: !branch.isHead || busy,
+        disabled: !branch.isHead || running,
         onSelect: () => {
-          void run(() => tauriGit.pull(path));
+          void run("pull", "Pull", () => tauriGit.pull(path));
         },
       },
       {
         id: "push",
         label: "Push",
-        disabled: !branch.isHead || busy,
+        disabled: !branch.isHead || running,
         onSelect: () => {
-          void run(() => tauriGit.push(path));
+          void run("push", "Push", () => tauriGit.push(path));
         },
       },
       {
         id: "create",
         label: "Crear rama aquí",
-        disabled: !branch.tipSha || busy,
+        disabled: !branch.tipSha || running,
         onSelect: () => {
           const nextName = window.prompt("Nombre de la nueva rama");
           const tip = branch.tipSha;
           if (!nextName || !tip) {
             return;
           }
-          void run(() => tauriGit.createBranchAt(path, nextName, tip));
+          void run("other", "Creando rama", () =>
+            tauriGit.createBranchAt(path, nextName, tip),
+          );
         },
       },
       {
         id: "rename",
         label: "Renombrar",
-        disabled: !local || busy,
+        disabled: !local || running,
         onSelect: () => {
           const nextName = window.prompt("Nuevo nombre", shortName(branch));
           if (!nextName || nextName.trim() === branch.name) {
             return;
           }
-          void run(() => tauriGit.renameBranch(path, branch.name, nextName));
+          void run("other", "Renombrando rama", () =>
+            tauriGit.renameBranch(path, branch.name, nextName),
+          );
         },
       },
       {
         id: "upstream",
         label: "Upstream",
-        disabled: !local || busy,
+        disabled: !local || running,
         onSelect: () => {
           const upstream = window.prompt("Upstream (origen/rama)", "origin/");
           if (!upstream) {
             return;
           }
-          void run(() => tauriGit.setUpstream(path, branch.name, upstream));
+          void run("other", "Actualizando upstream", () =>
+            tauriGit.setUpstream(path, branch.name, upstream),
+          );
         },
       },
       {
@@ -260,16 +280,35 @@ export function BranchPanel({
         id: "delete",
         label: "Borrar",
         danger: true,
-        disabled: !local || branch.isHead || busy,
+        disabled: !local || branch.isHead || running,
         onSelect: () => {
           if (!window.confirm(`¿Borrar la rama ${branch.name}?`)) {
             return;
           }
-          void run(() => tauriGit.deleteBranch(path, branch.name));
+          void run("other", "Borrando rama", () =>
+            tauriGit.deleteBranch(path, branch.name),
+          );
         },
       },
     ];
   }
+}
+
+function branchKey(branch: BranchRef): string {
+  return `${branch.remote ?? "local"}:${branch.name}`;
+}
+
+function preferredKey(
+  branches: BranchRef[],
+  selected: string | null,
+): string | null {
+  if (selected && branches.some((branch) => branchKey(branch) === selected)) {
+    return selected;
+  }
+  const head =
+    branches.find((branch) => branch.isHead && branch.remote === null) ??
+    branches.find((branch) => branch.isHead);
+  return head ? branchKey(head) : null;
 }
 
 function shortName(branch: BranchRef): string {
@@ -287,16 +326,20 @@ function BranchGroup({
   branches,
   folded,
   folderOpen,
+  selectedKey,
   onToggle,
   onToggleFolder,
+  onSelect,
   onOpen,
 }: {
   title: string;
   branches: BranchRef[];
   folded: boolean;
   folderOpen: (key: string) => boolean;
+  selectedKey: string | null;
   onToggle: () => void;
   onToggleFolder: (folder: string) => void;
+  onSelect: (branch: BranchRef) => void;
   onOpen: (branch: BranchRef, event: MouseEvent) => void;
 }) {
   const tree = organize(branches);
@@ -317,14 +360,18 @@ function BranchGroup({
             <BranchRow
               branch={tree.pinned}
               label={shortName(tree.pinned)}
+              selected={branchKey(tree.pinned) === selectedKey}
+              onSelect={onSelect}
               onOpen={onOpen}
             />
           ) : null}
           {tree.loose.map((branch) => (
             <BranchRow
-              key={`${branch.remote ?? "local"}:${branch.name}`}
+              key={branchKey(branch)}
               branch={branch}
               label={shortName(branch)}
+              selected={branchKey(branch) === selectedKey}
+              onSelect={onSelect}
               onOpen={onOpen}
             />
           ))}
@@ -346,10 +393,12 @@ function BranchGroup({
                   <ul>
                     {folder.branches.map((branch) => (
                       <BranchRow
-                        key={`${branch.remote ?? "local"}:${branch.name}`}
+                        key={branchKey(branch)}
                         branch={branch}
                         label={labelInFolder(branch, folder.name)}
                         indent
+                        selected={branchKey(branch) === selectedKey}
+                        onSelect={onSelect}
                         onOpen={onOpen}
                       />
                     ))}
@@ -368,25 +417,38 @@ function BranchRow({
   branch,
   label,
   indent = false,
+  selected,
+  onSelect,
   onOpen,
 }: {
   branch: BranchRef;
   label: string;
   indent?: boolean;
+  selected: boolean;
+  onSelect: (branch: BranchRef) => void;
   onOpen: (branch: BranchRef, event: MouseEvent) => void;
 }) {
+  const tone = selected
+    ? branch.isHead
+      ? "bg-accent-dim text-accent"
+      : "bg-surface-overlay text-text"
+    : branch.isHead
+      ? "text-accent hover:bg-surface-overlay"
+      : "text-text hover:bg-surface-overlay";
   return (
     <li>
       <button
         type="button"
-        onClick={(event) => onOpen(branch, event)}
+        aria-current={selected ? "true" : undefined}
+        title={branch.name}
+        onClick={() => onSelect(branch)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onOpen(branch, event);
+        }}
         className={`flex h-7 w-full items-center gap-2 text-left text-xs ${
           indent ? "pr-3 pl-8" : "px-3"
-        } ${
-          branch.isHead
-            ? "bg-accent-dim text-accent"
-            : "text-text hover:bg-surface-overlay"
-        }`}
+        } ${tone}`}
       >
         <GitBranch size={13} className="shrink-0" />
         <span className="truncate">{label}</span>

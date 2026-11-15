@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { useRepoSync } from "../../hooks/useRepoSync";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { useRepoSession } from "../../stores/repo-session";
 import { BranchPanel } from "../branches/BranchPanel";
@@ -18,21 +19,54 @@ export function WorkspaceShell({ path }: { path: string }) {
   const [revision, setRevision] = useState(0);
   const [tab, setTab] = useState<CenterTab>("history");
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
-  const [editorFile, setEditorFile] = useState<string | null>(null);
   const [workFile, setWorkFile] = useState<WorkFile | null>(null);
+  const [editorTarget, setEditorTarget] = useState<{
+    file: string;
+    sha: string | null;
+    id: number;
+  } | null>(null);
+  const editorRequest = useRef(0);
   const [trackedPath, setTrackedPath] = useState(path);
   if (trackedPath !== path) {
     setTrackedPath(path);
     setSelectedSha(null);
-    setEditorFile(null);
+    setEditorTarget(null);
     setWorkFile(null);
   }
+
+  const openTarget = useCallback(
+    (file: string, sha: string | null, focus: boolean) => {
+      editorRequest.current += 1;
+      setEditorTarget({ file, sha, id: editorRequest.current });
+      if (focus) {
+        setTab("editor");
+      }
+    },
+    [],
+  );
+  const previewCommitFile = useCallback(
+    (file: string) => {
+      if (!selectedSha) {
+        return;
+      }
+      openTarget(file, selectedSha, false);
+    },
+    [openTarget, selectedSha],
+  );
+  const editWorkFile = useCallback(
+    (file: string) => {
+      openTarget(file, null, true);
+    },
+    [openTarget],
+  );
 
   async function refreshRepository() {
     const repo = await tauriGit.openRepository(path);
     setInfo(repo);
     setRevision((current) => current + 1);
   }
+
+  useRepoSync(path, refreshRepository);
 
   function toggleCommit(sha: string) {
     setWorkFile(null);
@@ -80,25 +114,31 @@ export function WorkspaceShell({ path }: { path: string }) {
                     </TabButton>
                   </div>
                   <div className="min-h-0 flex-1">
-                    {tab === "history" && workFile ? (
+                    {tab === "editor" ? (
+                      <EditorPanel
+                        key={path}
+                        path={path}
+                        revision={revision}
+                        active
+                        file={editorTarget?.file ?? null}
+                        sha={editorTarget?.sha ?? null}
+                        requestId={editorTarget?.id ?? 0}
+                        onRepositoryChanged={refreshRepository}
+                      />
+                    ) : workFile ? (
                       <WorkDiffPanel
                         path={path}
                         file={workFile}
                         onSelect={selectWorkFile}
+                        onEdit={editWorkFile}
                       />
-                    ) : tab === "history" ? (
+                    ) : (
                       <HistoryPanel
                         path={path}
                         revision={revision}
                         selectedSha={selectedSha}
                         onSelect={toggleCommit}
                         onRepositoryChanged={refreshRepository}
-                      />
-                    ) : (
-                      <EditorPanel
-                        path={path}
-                        sha={selectedSha}
-                        file={editorFile}
                       />
                     )}
                   </div>
@@ -111,7 +151,8 @@ export function WorkspaceShell({ path }: { path: string }) {
                     path={path}
                     sha={selectedSha}
                     onClear={() => setSelectedSha(null)}
-                    onSelectFile={setEditorFile}
+                    onSelectFile={previewCommitFile}
+                    onEdit={editWorkFile}
                   />
                 ) : (
                   <StagingPanel
@@ -119,6 +160,7 @@ export function WorkspaceShell({ path }: { path: string }) {
                     revision={revision}
                     selected={workFile}
                     onSelect={selectWorkFile}
+                    onOpenFile={editWorkFile}
                     onRepositoryChanged={refreshRepository}
                   />
                 )}

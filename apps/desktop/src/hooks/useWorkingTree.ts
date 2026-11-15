@@ -1,5 +1,5 @@
 import type { WorkingTreeEntry } from "@githydra/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toGitClientError } from "../lib/git/errors";
 import { tauriGit } from "../lib/git/tauri-git-adapter";
 
@@ -8,8 +8,14 @@ export function useWorkingTree(path: string | null, revision = 0) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const previousPath = useRef(path);
 
   useEffect(() => {
+    const switched = previousPath.current !== path;
+    previousPath.current = path;
+    if (switched) {
+      setEntries([]);
+    }
     if (!path) {
       return;
     }
@@ -43,5 +49,11 @@ export function useWorkingTree(path: string | null, revision = 0) {
     setGeneration((current) => current + 1);
   }
 
-  return { entries, error, loading, reload };
+  return {
+    entries,
+    error,
+    loading,
+    refreshing: loading && entries.length > 0,
+    reload,
+  };
 }

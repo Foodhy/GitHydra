@@ -1,5 +1,4 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { open } from "@tauri-apps/plugin-dialog";
+import { Link } from "@tanstack/react-router";
 import { FolderOpen, GitBranchPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAppVersion } from "../../hooks/useAppVersion";
@@ -7,21 +6,17 @@ import { formatWhen } from "../../lib/format";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { clearOpenRepo } from "../../lib/open-session";
-import {
-  type RecentRepo,
-  readRecents,
-  rememberRecent,
-} from "../../lib/recents";
+import { type RecentRepo, readRecents } from "../../lib/recents";
+import { adoptRepository, openChosenFolder } from "../../lib/repo-actions";
+import { useCommandUi } from "../../stores/command-ui";
 import { useRepoSession } from "../../stores/repo-session";
 
 export function WelcomePage() {
-  const navigate = useNavigate();
   const setInfo = useRepoSession((state) => state.setInfo);
   const [recents, setRecents] = useState<RecentRepo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [cloneOpen, setCloneOpen] = useState(false);
-  const [cloneUrl, setCloneUrl] = useState("");
+  const openClone = useCommandUi((state) => state.openClone);
   const [desktopReady, setDesktopReady] = useState(true);
   const version = useAppVersion();
 
@@ -37,42 +32,8 @@ export function WelcomePage() {
     setError(null);
     try {
       const repo = await tauriGit.openRepository(path);
-      await rememberRecent(repo);
       setInfo(repo);
-      await navigate({
-        to: "/repo/$",
-        params: { _splat: repo.path.replace(/^\/+/, "") },
-      });
-    } catch (reason: unknown) {
-      setError(toGitClientError(reason).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function cloneRepo() {
-    const url = cloneUrl.trim();
-    if (!url) {
-      return;
-    }
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Carpeta donde clonar",
-    });
-    if (typeof selected !== "string") {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const repo = await tauriGit.cloneRepository(url, selected);
-      await rememberRecent(repo);
-      setInfo(repo);
-      await navigate({
-        to: "/repo/$",
-        params: { _splat: repo.path.replace(/^\/+/, "") },
-      });
+      await adoptRepository(repo);
     } catch (reason: unknown) {
       setError(toGitClientError(reason).message);
     } finally {
@@ -81,15 +42,15 @@ export function WelcomePage() {
   }
 
   async function browse() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Abrir repositorio",
-    });
-    if (typeof selected !== "string") {
-      return;
+    setBusy(true);
+    setError(null);
+    try {
+      await openChosenFolder();
+    } catch (reason: unknown) {
+      setError(toGitClientError(reason).message);
+    } finally {
+      setBusy(false);
     }
-    await openPath(selected);
   }
 
   return (
@@ -128,37 +89,13 @@ export function WelcomePage() {
           <button
             type="button"
             disabled={busy || !desktopReady}
-            onClick={() => setCloneOpen((current) => !current)}
+            onClick={openClone}
             className="inline-flex items-center gap-2 rounded border border-line px-4 py-2 text-sm"
           >
             <GitBranchPlus size={16} />
             Clonar desde URL
           </button>
         </div>
-        {cloneOpen ? (
-          <form
-            className="mt-4 flex gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void cloneRepo();
-            }}
-          >
-            <input
-              value={cloneUrl}
-              disabled={busy}
-              placeholder="https://… o git@…"
-              onChange={(event) => setCloneUrl(event.target.value)}
-              className="min-w-0 flex-1 rounded border border-line bg-surface-raised px-3 py-2 text-sm"
-            />
-            <button
-              type="submit"
-              disabled={busy || cloneUrl.trim().length === 0}
-              className="rounded bg-accent px-3 py-2 text-sm font-medium text-surface disabled:opacity-50"
-            >
-              Elegir carpeta
-            </button>
-          </form>
-        ) : null}
         <section className="mt-8">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
             Recientes

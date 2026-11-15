@@ -10,11 +10,13 @@ export function CommitDiffPanel({
   sha,
   onClear,
   onSelectFile,
+  onEdit,
 }: {
   path: string;
   sha: string;
   onClear: () => void;
   onSelectFile: (file: string) => void;
+  onEdit: (file: string) => void;
 }) {
   const [diff, setDiff] = useState<CommitDiff | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -53,9 +55,23 @@ export function CommitDiffPanel({
     <aside className="flex h-full flex-col bg-surface-raised">
       <header className="flex items-center justify-between gap-2 border-b border-line px-3 py-2 text-xs text-muted">
         <span className="truncate font-mono">{sha.slice(0, 7)}</span>
-        <button type="button" onClick={onClear} className="text-accent">
-          Ver cambios
-        </button>
+        <span className="flex items-center gap-3">
+          <button
+            type="button"
+            disabled={!selected}
+            onClick={() => {
+              if (selected) {
+                onEdit(selected);
+              }
+            }}
+            className="text-accent disabled:text-muted"
+          >
+            Editar
+          </button>
+          <button type="button" onClick={onClear} className="text-accent">
+            Ver cambios
+          </button>
+        </span>
       </header>
       {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
       {!diff && !error ? (

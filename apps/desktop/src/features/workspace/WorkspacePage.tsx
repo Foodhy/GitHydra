@@ -5,6 +5,7 @@ import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { rememberOpenRepo } from "../../lib/open-session";
 import { rememberRecent } from "../../lib/recents";
 import { useRepoSession } from "../../stores/repo-session";
+import { useRepoTabs } from "../../stores/repo-tabs";
 import { WorkspaceShell } from "./WorkspaceShell";
 
 const routeApi = getRouteApi("/repo/$");
@@ -28,6 +29,10 @@ export function WorkspacePage() {
         }
         setInfo(repo);
         setOpenedPath(repo.path);
+        const tabs = useRepoTabs.getState();
+        if (!tabs.tabs.some((tab) => tab.path === repo.path)) {
+          tabs.openPath(repo.path, repo.name);
+        }
         await rememberRecent(repo);
         await rememberOpenRepo(repo.path);
       })

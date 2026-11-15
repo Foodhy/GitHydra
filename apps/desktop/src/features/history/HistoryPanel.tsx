@@ -4,8 +4,8 @@ import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useBranches } from "../../hooks/useBranches";
 import { useCommitLog } from "../../hooks/useCommitLog";
 import { formatWhen, subjectOf } from "../../lib/format";
-import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { runOperation } from "../../lib/run-operation";
 import { branchColor } from "../graph/colors";
 import { CommitGraph } from "../graph/GraphPanel";
 import { GRAPH_ROW_HEIGHT } from "../graph/layout";
@@ -23,17 +23,14 @@ export function HistoryPanel({
   onSelect: (sha: string) => void;
   onRepositoryChanged: () => Promise<void>;
 }) {
-  const { commits, cursor, loading, error, loadMore } = useCommitLog(
-    path,
-    revision,
-  );
+  const { commits, cursor, loading, refreshing, error, loadMore } =
+    useCommitLog(path, revision);
   const { branches } = useBranches(path, revision);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
     items: MenuItem[];
   } | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
 
   function openCommit(sha: string, event: MouseEvent) {
     const commit = commits.find((item) => item.sha === sha);
@@ -51,8 +48,10 @@ export function HistoryPanel({
     <div className="flex h-full min-w-0 flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
         {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
-        {actionError ? (
-          <p className="px-3 py-2 text-xs text-warn">{actionError}</p>
+        {refreshing ? (
+          <p className="px-3 py-1 text-[11px] text-muted">
+            Actualizando historial…
+          </p>
         ) : null}
         <div className="flex min-w-0">
           {commits.length > 0 ? (
@@ -60,6 +59,7 @@ export function HistoryPanel({
               commits={commits}
               branches={branches}
               selectedSha={selectedSha}
+              onSelect={onSelect}
               onOpen={openCommit}
             />
           ) : null}
@@ -70,6 +70,7 @@ export function HistoryPanel({
                 commit={commit}
                 branches={branches}
                 selected={commit.sha === selectedSha}
+                onSelect={onSelect}
                 onOpen={openCommit}
               />
             ))}
@@ -132,12 +133,12 @@ export function HistoryPanel({
           ) {
             return;
           }
-          void tauriGit
-            .checkoutCommit(path, commit.sha)
-            .then(() => onRepositoryChanged())
-            .catch((reason: unknown) => {
-              setActionError(toGitClientError(reason).message);
-            });
+          void runOperation(
+            "checkout",
+            "Cambiando a este commit",
+            () => tauriGit.checkoutCommit(path, commit.sha),
+            onRepositoryChanged,
+          );
         },
       },
       {
@@ -155,12 +156,12 @@ export function HistoryPanel({
           if (message === null) {
             return;
           }
-          void tauriGit
-            .createTag(path, commit.sha, tagName, message)
-            .then(() => onRepositoryChanged())
-            .catch((reason: unknown) => {
-              setActionError(toGitClientError(reason).message);
-            });
+          void runOperation(
+            "other",
+            "Creando tag",
+            () => tauriGit.createTag(path, commit.sha, tagName, message),
+            onRepositoryChanged,
+          );
         },
       },
       {
@@ -171,12 +172,12 @@ export function HistoryPanel({
           if (!nextName) {
             return;
           }
-          void tauriGit
-            .createBranchAt(path, nextName, commit.sha)
-            .then(() => onRepositoryChanged())
-            .catch((reason: unknown) => {
-              setActionError(toGitClientError(reason).message);
-            });
+          void runOperation(
+            "other",
+            "Creando rama",
+            () => tauriGit.createBranchAt(path, nextName, commit.sha),
+            onRepositoryChanged,
+          );
         },
       },
     ];
@@ -222,11 +223,13 @@ function CommitRow({
   commit,
   branches,
   selected,
+  onSelect,
   onOpen,
 }: {
   commit: CommitSummary;
   branches: BranchRef[];
   selected: boolean;
+  onSelect: (sha: string) => void;
   onOpen: (sha: string, event: MouseEvent) => void;
 }) {
   const tips = branches.filter((branch) => branch.tipSha === commit.sha);
@@ -234,7 +237,11 @@ function CommitRow({
     <li>
       <button
         type="button"
-        onClick={(event) => onOpen(commit.sha, event)}
+        onClick={() => onSelect(commit.sha)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onOpen(commit.sha, event);
+        }}
         style={{ height: GRAPH_ROW_HEIGHT }}
         className={`box-border flex w-full items-center gap-2 overflow-hidden border-b border-line/70 px-3 text-left ${
           selected

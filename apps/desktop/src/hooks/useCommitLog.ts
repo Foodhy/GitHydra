@@ -1,5 +1,5 @@
 import type { CommitSummary } from "@githydra/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toGitClientError } from "../lib/git/errors";
 import { tauriGit } from "../lib/git/tauri-git-adapter";
 
@@ -10,16 +10,21 @@ export function useCommitLog(path: string | null, revision = 0) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previousPath = useRef(path);
 
   useEffect(() => {
     if (!path || revision < 0) {
       return;
     }
+    const switched = previousPath.current !== path;
+    previousPath.current = path;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    setCommits([]);
-    setCursor(null);
+    if (switched) {
+      setCommits([]);
+      setCursor(null);
+    }
     tauriGit
       .listCommits(path, PAGE, null)
       .then((page) => {
@@ -60,5 +65,12 @@ export function useCommitLog(path: string | null, revision = 0) {
     }
   }
 
-  return { commits, cursor, loading, error, loadMore };
+  return {
+    commits,
+    cursor,
+    loading,
+    refreshing: loading && commits.length > 0,
+    error,
+    loadMore,
+  };
 }

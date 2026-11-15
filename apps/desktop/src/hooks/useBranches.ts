@@ -1,5 +1,5 @@
 import type { BranchRef } from "@githydra/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toGitClientError } from "../lib/git/errors";
 import { tauriGit } from "../lib/git/tauri-git-adapter";
 
@@ -7,8 +7,14 @@ export function useBranches(path: string | null, revision = 0) {
   const [branches, setBranches] = useState<BranchRef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const previousPath = useRef(path);
 
   useEffect(() => {
+    const switched = previousPath.current !== path;
+    previousPath.current = path;
+    if (switched) {
+      setBranches([]);
+    }
     if (!path || revision < 0) {
       return;
     }
@@ -37,5 +43,10 @@ export function useBranches(path: string | null, revision = 0) {
     };
   }, [path, revision]);
 
-  return { branches, error, loading };
+  return {
+    branches,
+    error,
+    loading,
+    refreshing: loading && branches.length > 0,
+  };
 }

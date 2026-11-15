@@ -1,12 +1,93 @@
+pub mod activity;
 mod error;
+pub mod files;
 
 use chrono::{DateTime, FixedOffset};
 pub use error::GitError;
 use git2::{BranchType, Delta, DiffOptions, Repository, Sort, Status, StatusOptions};
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+static REPO_LOCKS: Mutex<Option<HashMap<String, Arc<Mutex<()>>>>> = Mutex::new(None);
+
+pub fn with_repo<T>(path: &str, action: impl FnOnce() -> T) -> T {
+    let key = std::fs::canonicalize(path)
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.trim().to_string());
+    let mutex = {
+        let mut slots = REPO_LOCKS.lock().expect("repo locks");
+        let slots = slots.get_or_insert_with(HashMap::new);
+        slots
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = mutex.lock().expect("repo lock");
+    action()
+}
+
+pub struct WatchRoot {
+    pub path: PathBuf,
+    pub recursive: bool,
+}
+
+pub fn watch_roots(repo_path: &str) -> Result<Vec<WatchRoot>, GitError> {
+    let repo = discover(repo_path)?;
+    let gitdir = repo.path().to_path_buf();
+    let common_raw = repo.commondir();
+    let common = if common_raw.is_absolute() {
+        common_raw.to_path_buf()
+    } else {
+        gitdir.join(common_raw)
+    };
+    let mut roots = vec![
+        WatchRoot {
+            path: gitdir.clone(),
+            recursive: false,
+        },
+        WatchRoot {
+            path: common.clone(),
+            recursive: false,
+        },
+        WatchRoot {
+            path: common.join("refs").join("heads"),
+            recursive: true,
+        },
+        WatchRoot {
+            path: common.join("refs").join("remotes"),
+            recursive: true,
+        },
+    ];
+    if gitdir != common {
+        roots.push(WatchRoot {
+            path: gitdir.join("refs").join("heads"),
+            recursive: true,
+        });
+    }
+    let mut seen = HashSet::new();
+    roots.retain(|root| seen.insert((root.path.clone(), root.recursive)));
+    Ok(roots)
+}
+
+pub fn ignored_git_event(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    name.ends_with(".lock")
+        || name == "FETCH_HEAD"
+        || name == "ORIG_HEAD"
+        || name == "MERGE_HEAD"
+        || name == "CHERRY_PICK_HEAD"
+        || name == "REVERT_HEAD"
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -473,7 +554,7 @@ const FILE_BYTE_LIMIT: usize = 1024 * 1024;
 pub fn fetch(repo_path: &str) -> Result<(), GitError> {
     let repo = discover(repo_path)?;
     let remote_name = tracking_remote_name(&repo)?.unwrap_or_else(|| "origin".to_string());
-    fetch_remote(&repo, &remote_name)
+    finish_network(fetch_remote(&repo, &remote_name))
 }
 
 pub fn pull(repo_path: &str) -> Result<(), GitError> {
@@ -507,7 +588,7 @@ pub fn pull(repo_path: &str) -> Result<(), GitError> {
     reference
         .set_target(commit.id(), "GitHydra: fast-forward")
         .map_err(map_git)?;
-    Ok(())
+    finish_network(Ok(()))
 }
 
 pub fn push(repo_path: &str) -> Result<(), GitError> {
@@ -519,7 +600,7 @@ pub fn push(repo_path: &str) -> Result<(), GitError> {
     let refspec = format!("refs/heads/{local}:refs/heads/{remote_branch}");
     let mut options = git2::PushOptions::new();
     options.remote_callbacks(remote_callbacks());
-    remote.push(&[refspec], Some(&mut options)).map_err(map_git)
+    finish_network(remote.push(&[refspec], Some(&mut options)).map_err(map_git))
 }
 
 pub fn clone_repository(url: &str, directory: &str) -> Result<RepositoryInfo, GitError> {
@@ -547,11 +628,23 @@ pub fn clone_repository(url: &str, directory: &str) -> Result<RepositoryInfo, Gi
     options.remote_callbacks(remote_callbacks());
     let mut builder = git2::build::RepoBuilder::new();
     builder.fetch_options(options);
-    builder.clone(url, &dest).map_err(map_git)?;
+    finish_network(builder.clone(url, &dest).map_err(map_git))?;
     let dest_path = dest
         .to_str()
         .ok_or_else(|| GitError::Io("La ruta clonada no es UTF-8".into()))?;
     open_repository(dest_path)
+}
+
+pub fn init_repository(directory: &str) -> Result<RepositoryInfo, GitError> {
+    let trimmed = directory.trim();
+    let path = Path::new(trimmed);
+    if !path.is_dir() {
+        return Err(GitError::Io("La carpeta no existe".into()));
+    }
+    if Repository::open(path).is_err() {
+        Repository::init(path).map_err(map_git)?;
+    }
+    open_repository(trimmed)
 }
 
 pub fn read_commit_file(repo_path: &str, sha: &str, file: &str) -> Result<String, GitError> {
@@ -624,6 +717,9 @@ fn upstream_parts(repo: &Repository) -> Result<(String, String, String), GitErro
 fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed| {
+        if activity::cancelled() {
+            return Err(git2::Error::from_str("Cancelado"));
+        }
         if allowed.contains(git2::CredentialType::SSH_KEY) {
             let user = username_from_url.unwrap_or("git");
             if let Ok(cred) = git2::Cred::ssh_key_from_agent(user) {
@@ -631,9 +727,20 @@ fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
             }
         }
         if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
-            && let Some((user, password)) = git_credential_fill(url)
+            && let Some((protocol, host)) = https_host(url)
         {
-            return git2::Cred::userpass_plaintext(&user, &password);
+            match git_credential_fill(&protocol, &host) {
+                Ok((user, password)) => {
+                    return git2::Cred::userpass_plaintext(&user, &password);
+                }
+                Err(error) if error == "Cancelado" || error.contains("no respondió") => {
+                    return Err(git2::Error::from_str(&error));
+                }
+                Err(_) => {}
+            }
+        }
+        if activity::cancelled() {
+            return Err(git2::Error::from_str("Cancelado"));
         }
         if allowed.contains(git2::CredentialType::DEFAULT) {
             return git2::Cred::default();
@@ -642,28 +749,102 @@ fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
             "No hay credencial. Revisa el agente SSH o git credential.",
         ))
     });
+    callbacks.transfer_progress(|progress| {
+        if activity::cancelled() {
+            return false;
+        }
+        let message = if progress.total_objects() > 0
+            && progress.received_objects() == progress.total_objects()
+        {
+            format!(
+                "resolviendo deltas {}/{}",
+                progress.indexed_deltas(),
+                progress.total_deltas()
+            )
+        } else {
+            format!(
+                "{}/{} objetos",
+                progress.received_objects(),
+                progress.total_objects()
+            )
+        };
+        activity::report(&message);
+        true
+    });
+    callbacks.sideband_progress(|data| {
+        if activity::cancelled() {
+            return false;
+        }
+        if let Ok(text) = std::str::from_utf8(data) {
+            activity::report(text);
+        }
+        true
+    });
+    callbacks.push_transfer_progress(|current, total, _bytes| {
+        if !activity::cancelled() {
+            activity::report(&format!("{current}/{total} objetos"));
+        }
+    });
+    callbacks.push_update_reference(|_reference, _status| {
+        if activity::cancelled() {
+            return Err(git2::Error::from_str("Cancelado"));
+        }
+        Ok(())
+    });
     callbacks
 }
 
-fn git_credential_fill(url: &str) -> Option<(String, String)> {
-    let (protocol, host) = https_host(url)?;
+fn finish_network<T>(result: Result<T, GitError>) -> Result<T, GitError> {
+    if activity::cancelled() {
+        return Err(GitError::Io("Cancelado".into()));
+    }
+    result
+}
+
+fn git_credential_fill(protocol: &str, host: &str) -> Result<(String, String), String> {
     let mut child = Command::new("git")
         .args(["credential", "fill"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
-    let mut stdin = child.stdin.take()?;
-    stdin
-        .write_all(format!("protocol={protocol}\nhost={host}\n\n").as_bytes())
-        .ok()?;
-    drop(stdin);
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        return None;
+        .map_err(|err| err.to_string())?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "git credential no devolvió salida".to_string())?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "git credential no acepta entrada".to_string())?;
+        stdin
+            .write_all(format!("protocol={protocol}\nhost={host}\n\n").as_bytes())
+            .map_err(|err| err.to_string())?;
     }
-    let text = String::from_utf8(output.stdout).ok()?;
+    let started = Instant::now();
+    let status = loop {
+        if activity::cancelled() {
+            let _ = child.kill();
+            return Err("Cancelado".into());
+        }
+        if started.elapsed() >= Duration::from_secs(20) {
+            let _ = child.kill();
+            return Err("git credential no respondió".into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(err) => return Err(err.to_string()),
+        }
+    };
+    if !status.success() {
+        return Err("No hay credencial".into());
+    }
+    let mut text = String::new();
+    stdout
+        .read_to_string(&mut text)
+        .map_err(|err| err.to_string())?;
     let mut username = None;
     let mut password = None;
     for line in text.lines() {
@@ -674,7 +855,10 @@ fn git_credential_fill(url: &str) -> Option<(String, String)> {
             password = Some(value.to_string());
         }
     }
-    Some((username?, password?))
+    match (username, password) {
+        (Some(user), Some(password)) => Ok((user, password)),
+        _ => Err("No hay credencial".into()),
+    }
 }
 
 fn https_host(url: &str) -> Option<(String, String)> {
@@ -985,7 +1169,7 @@ fn delta_kind(status: Delta) -> &'static str {
     }
 }
 
-fn discover(path: &str) -> Result<Repository, GitError> {
+pub(crate) fn discover(path: &str) -> Result<Repository, GitError> {
     let trimmed = path.trim();
     if trimmed.is_empty() || !Path::new(trimmed).exists() {
         return Err(GitError::Io(format!("La ruta no existe: {trimmed}")));
@@ -1392,5 +1576,16 @@ mod tests {
         let detached = open_repository(path).expect("detached");
         assert!(detached.is_detached);
         assert_eq!(detached.head_sha.as_deref(), Some(sha.as_str()));
+    }
+
+    #[test]
+    fn inits_a_folder_and_reopens_it() {
+        let dir = scratch_dir();
+        let path = dir.0.to_str().unwrap();
+        let info = init_repository(path).expect("init");
+        assert!(dir.0.join(".git").is_dir());
+        assert_eq!(info.path, dir.0.canonicalize().unwrap().to_string_lossy());
+        let again = init_repository(path).expect("already a repo");
+        assert_eq!(again.path, info.path);
     }
 }

@@ -7,6 +7,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { useEffect } from "react";
+import { AppChrome } from "../features/repos/AppChrome";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { WelcomePage } from "../features/welcome/WelcomePage";
 import { WorkspacePage } from "../features/workspace/WorkspacePage";
@@ -14,8 +15,11 @@ import { applyAppearance, readAppearance } from "../lib/appearance";
 
 const rootRoute = createRootRoute({
   component: () => (
-    <div className="h-full">
-      <Outlet />
+    <div className="flex h-full flex-col">
+      <AppChrome />
+      <div className="min-h-0 flex-1">
+        <Outlet />
+      </div>
     </div>
   ),
 });

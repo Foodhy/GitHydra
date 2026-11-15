@@ -17,7 +17,7 @@ Desktop Git client for macOS. This release is the foundation: open a repository,
 pnpm install
 pnpm dev          # development window
 pnpm install-app  # rebuild, install to /Applications, and open GitHydra
-pnpm build        # .app and .dmg only, no install
+pnpm build        # .app and .dmg only, no install (docs/DMG.md)
 pnpm mcp          # MCP server over stdio
 pnpm check        # Biome, format, clippy, and tests
 ```

@@ -11,11 +11,16 @@ import {
   SquareTerminal,
   Undo2,
 } from "lucide-react";
-import { useState } from "react";
 import { ToolButton } from "../../components/ToolButton";
 import { useAppVersion } from "../../hooks/useAppVersion";
-import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { showRepoManagement } from "../../lib/repo-actions";
+import {
+  canCancel,
+  cancelOperation,
+  runOperation,
+} from "../../lib/run-operation";
+import { operationStatus, useOperation } from "../../stores/operation";
 import { useRepoSession } from "../../stores/repo-session";
 
 export function TopBar({
@@ -27,31 +32,28 @@ export function TopBar({
 }) {
   const info = useRepoSession((state) => state.info);
   const version = useAppVersion();
-  const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const operation = useOperation();
   const branch = info?.isDetached
     ? "HEAD suelto"
     : (info?.currentBranch ?? "sin rama");
+  const status = operationStatus(branch, operation);
 
-  async function run(action: () => Promise<void>) {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    setActionError(null);
-    try {
-      await action();
-      await onRepositoryChanged();
-    } catch (reason: unknown) {
-      setActionError(toGitClientError(reason).message);
-    } finally {
-      setBusy(false);
-    }
+  function run(
+    kind: "fetch" | "pull" | "push",
+    label: string,
+    action: () => Promise<void>,
+  ) {
+    void runOperation(kind, label, action, onRepositoryChanged);
   }
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-surface-raised px-3">
-      <Link to="/" className="rounded p-1 text-accent" title="Repos">
+      <Link
+        to="/"
+        onClick={() => showRepoManagement()}
+        className="rounded p-1 text-accent"
+        title="Repos"
+      >
         <FolderGit2 size={18} />
       </Link>
       <div className="min-w-0">
@@ -59,10 +61,21 @@ export function TopBar({
           {info?.name ?? "GitHydra"}
         </p>
         <p
-          className={`truncate text-[11px] ${actionError ? "text-warn" : "text-muted"}`}
-          title={actionError ?? undefined}
+          className={`flex min-w-0 items-center gap-2 truncate text-[11px] ${status.warn ? "text-warn" : "text-muted"}`}
+          title={status.text}
         >
-          {actionError ?? branch}
+          <span className="truncate">{status.text}</span>
+          {operation.running && canCancel(operation.kind) ? (
+            <button
+              type="button"
+              onClick={() => {
+                void cancelOperation();
+              }}
+              className="shrink-0 text-accent"
+            >
+              Cancelar
+            </button>
+          ) : null}
         </p>
       </div>
       <div className="mx-auto flex items-center gap-0.5">
@@ -74,27 +87,30 @@ export function TopBar({
         </ToolButton>
         <ToolButton
           label="Fetch"
-          disabled={busy}
+          busy={operation.running && operation.kind === "fetch"}
+          disabled={operation.running && operation.kind !== "fetch"}
           onClick={() => {
-            void run(() => tauriGit.fetch(path));
+            run("fetch", "Fetch", () => tauriGit.fetch(path));
           }}
         >
           <CloudDownload size={16} />
         </ToolButton>
         <ToolButton
           label="Pull"
-          disabled={busy}
+          busy={operation.running && operation.kind === "pull"}
+          disabled={operation.running && operation.kind !== "pull"}
           onClick={() => {
-            void run(() => tauriGit.pull(path));
+            run("pull", "Pull", () => tauriGit.pull(path));
           }}
         >
           <ArrowDownToLine size={16} />
         </ToolButton>
         <ToolButton
           label="Push"
-          disabled={busy}
+          busy={operation.running && operation.kind === "push"}
+          disabled={operation.running && operation.kind !== "push"}
           onClick={() => {
-            void run(() => tauriGit.push(path));
+            run("push", "Push", () => tauriGit.push(path));
           }}
         >
           <ArrowUpFromLine size={16} />

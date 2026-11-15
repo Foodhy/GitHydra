@@ -73,6 +73,9 @@ export const tauriGit: GitPort = {
   cloneRepository(url, directory) {
     return invoke<RepositoryInfo>("clone_repository", { url, directory });
   },
+  initRepository(directory) {
+    return invoke<RepositoryInfo>("init_repository", { directory });
+  },
   readCommitFile(path, sha, file) {
     return invoke<string>("read_commit_file", { path, sha, file });
   },

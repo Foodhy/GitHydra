@@ -119,5 +119,6 @@ export interface GitPort {
   pull(path: string): Promise<void>;
   push(path: string): Promise<void>;
   cloneRepository(url: string, directory: string): Promise<RepositoryInfo>;
+  initRepository(directory: string): Promise<RepositoryInfo>;
   readCommitFile(path: string, sha: string, file: string): Promise<string>;
 }

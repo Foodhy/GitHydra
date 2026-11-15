@@ -22,10 +22,12 @@ export function WorkDiffPanel({
   path,
   file,
   onSelect,
+  onEdit,
 }: {
   path: string;
   file: WorkFile;
   onSelect: (file: WorkFile) => void;
+  onEdit: (file: string) => void;
 }) {
   const [diff, setDiff] = useState<WorkDiff | null>(null);
   const [files, setFiles] = useState<WorkFile[]>([]);
@@ -97,6 +99,13 @@ export function WorkDiffPanel({
             {file.staged ? "en stage" : "sin stage"}
           </span>
         </p>
+        <button
+          type="button"
+          onClick={() => onEdit(file.path)}
+          className="rounded px-2 py-1 text-[11px] text-accent"
+        >
+          Editar
+        </button>
         <div className="flex gap-1">
           {VIEWS.map((item) => (
             <button

@@ -1,47 +1,9 @@
-import { DiffEditor, Editor, loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import { DiffEditor, Editor } from "@monaco-editor/react";
 import { useMemo } from "react";
-
-loader.config({ monaco });
-
-self.MonacoEnvironment = {
-  getWorker() {
-    return new editorWorker();
-  },
-};
+import { languageOf } from "../editor/language";
+import { defineGitHydraTheme } from "../editor/monaco";
 
 type DiffMode = "unido" | "lados" | "antes" | "despues";
-
-const LANGUAGES: Record<string, string> = {
-  html: "html",
-  htm: "html",
-  css: "css",
-  js: "javascript",
-  jsx: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  ts: "typescript",
-  tsx: "typescript",
-  json: "json",
-  md: "markdown",
-  mdx: "markdown",
-  rs: "rust",
-  py: "python",
-  yml: "yaml",
-  yaml: "yaml",
-  toml: "ini",
-  sh: "shell",
-  xml: "xml",
-};
-
-export function languageOf(path: string): string {
-  const name = path.split("/").pop() ?? path;
-  const extension = name.includes(".")
-    ? name.slice(name.lastIndexOf(".") + 1).toLowerCase()
-    : "";
-  return LANGUAGES[extension] ?? "plaintext";
-}
 
 export function CodeDiff({
   filePath,
@@ -75,7 +37,7 @@ export function CodeDiff({
         language={language}
         theme="githydra"
         value={mode === "antes" ? before : after}
-        beforeMount={defineTheme}
+        beforeMount={defineGitHydraTheme}
         options={options}
         height="100%"
       />
@@ -88,33 +50,11 @@ export function CodeDiff({
       theme="githydra"
       original={before}
       modified={after}
-      beforeMount={defineTheme}
+      beforeMount={defineGitHydraTheme}
       options={options}
       height="100%"
     />
   );
-}
-
-function defineTheme(instance: typeof monaco) {
-  const styles = getComputedStyle(document.documentElement);
-  const color = (name: string, fallback: string) =>
-    styles.getPropertyValue(name).trim() || fallback;
-  const accent = color("--color-accent", "#3ee0b0");
-  const warn = color("--color-warn", "#e6b35a");
-  instance.editor.defineTheme("githydra", {
-    base: "vs-dark",
-    inherit: true,
-    rules: [],
-    colors: {
-      "editor.background": color("--color-surface", "#12141a"),
-      "editor.foreground": color("--color-text", "#e7e9ef"),
-      "editorLineNumber.foreground": color("--color-muted", "#8d95a8"),
-      "diffEditor.insertedTextBackground": `${accent}33`,
-      "diffEditor.removedTextBackground": `${warn}33`,
-      "diffEditor.insertedLineBackground": `${accent}22`,
-      "diffEditor.removedLineBackground": `${warn}22`,
-    },
-  });
 }
 
 export function noteOf(text: string): string | null {
