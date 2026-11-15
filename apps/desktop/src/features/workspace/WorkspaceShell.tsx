@@ -17,10 +17,12 @@ export function WorkspaceShell({ path }: { path: string }) {
   const [revision, setRevision] = useState(0);
   const [tab, setTab] = useState<CenterTab>("history");
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
+  const [editorFile, setEditorFile] = useState<string | null>(null);
   const [trackedPath, setTrackedPath] = useState(path);
   if (trackedPath !== path) {
     setTrackedPath(path);
     setSelectedSha(null);
+    setEditorFile(null);
   }
 
   async function refreshRepository() {
@@ -35,7 +37,7 @@ export function WorkspaceShell({ path }: { path: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      <TopBar />
+      <TopBar path={path} onRepositoryChanged={refreshRepository} />
       <div className="min-h-0 flex-1">
         <PanelGroup autoSaveId="githydra-rows" direction="vertical">
           <Panel defaultSize={78} minSize={40}>
@@ -73,7 +75,11 @@ export function WorkspaceShell({ path }: { path: string }) {
                         onSelect={toggleCommit}
                       />
                     ) : (
-                      <EditorPanel />
+                      <EditorPanel
+                        path={path}
+                        sha={selectedSha}
+                        file={editorFile}
+                      />
                     )}
                   </div>
                 </section>
@@ -85,6 +91,7 @@ export function WorkspaceShell({ path }: { path: string }) {
                     path={path}
                     sha={selectedSha}
                     onClear={() => setSelectedSha(null)}
+                    onSelectFile={setEditorFile}
                   />
                 ) : (
                   <StagingPanel
@@ -98,7 +105,7 @@ export function WorkspaceShell({ path }: { path: string }) {
           </Panel>
           <PanelResizeHandle className="h-px bg-line" />
           <Panel defaultSize={22} minSize={10} className="min-h-0">
-            <TerminalPanel />
+            <TerminalPanel path={path} />
           </Panel>
         </PanelGroup>
       </div>

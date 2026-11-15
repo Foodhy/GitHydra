@@ -7,10 +7,12 @@ export function CommitDiffPanel({
   path,
   sha,
   onClear,
+  onSelectFile,
 }: {
   path: string;
   sha: string;
   onClear: () => void;
+  onSelectFile: (file: string) => void;
 }) {
   const [diff, setDiff] = useState<CommitDiff | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -27,7 +29,11 @@ export function CommitDiffPanel({
           return;
         }
         setDiff(next);
-        setSelected(next.files[0]?.path ?? null);
+        const first = next.files[0]?.path ?? null;
+        setSelected(first);
+        if (first) {
+          onSelectFile(first);
+        }
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
@@ -37,7 +43,7 @@ export function CommitDiffPanel({
     return () => {
       cancelled = true;
     };
-  }, [path, sha]);
+  }, [path, sha, onSelectFile]);
 
   const file = diff?.files.find((entry) => entry.path === selected) ?? null;
 
@@ -63,7 +69,10 @@ export function CommitDiffPanel({
                 <li key={`${entry.kind}:${entry.path}`}>
                   <button
                     type="button"
-                    onClick={() => setSelected(entry.path)}
+                    onClick={() => {
+                      setSelected(entry.path);
+                      onSelectFile(entry.path);
+                    }}
                     className={`flex w-full items-center gap-2 px-3 py-0.5 text-left font-mono text-xs ${
                       entry.path === selected ? "bg-surface-overlay" : ""
                     }`}

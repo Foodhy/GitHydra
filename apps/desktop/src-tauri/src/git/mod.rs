@@ -4,7 +4,9 @@ use chrono::{DateTime, FixedOffset};
 pub use error::GitError;
 use git2::{BranchType, Delta, DiffOptions, Repository, Sort, Status, StatusOptions};
 use serde::Serialize;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -370,6 +372,242 @@ pub fn delete_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
         return Err(GitError::Io("No se puede borrar la rama actual".into()));
     }
     branch.delete().map_err(map_git)
+}
+
+const FILE_BYTE_LIMIT: usize = 1024 * 1024;
+
+pub fn fetch(repo_path: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let remote_name = tracking_remote_name(&repo)?.unwrap_or_else(|| "origin".to_string());
+    fetch_remote(&repo, &remote_name)
+}
+
+pub fn pull(repo_path: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let (local, remote_name, remote_branch) = upstream_parts(&repo)?;
+    fetch_remote(&repo, &remote_name)?;
+    let upstream = repo
+        .find_branch(
+            &format!("{remote_name}/{remote_branch}"),
+            BranchType::Remote,
+        )
+        .map_err(|_| GitError::Io("La rama no tiene upstream".into()))?;
+    let annotated = repo
+        .reference_to_annotated_commit(upstream.get())
+        .map_err(map_git)?;
+    let (analysis, _) = repo.merge_analysis(&[&annotated]).map_err(map_git)?;
+    if analysis.is_up_to_date() {
+        return Ok(());
+    }
+    if !analysis.is_fast_forward() {
+        return Err(GitError::Io(
+            "Hace falta un merge. Esta versión solo avanza si es fast-forward.".into(),
+        ));
+    }
+    let commit = repo.find_commit(annotated.id()).map_err(map_git)?;
+    repo.checkout_tree(commit.as_object(), None)
+        .map_err(map_git)?;
+    let mut reference = repo
+        .find_reference(&format!("refs/heads/{local}"))
+        .map_err(map_git)?;
+    reference
+        .set_target(commit.id(), "GitHydra: fast-forward")
+        .map_err(map_git)?;
+    Ok(())
+}
+
+pub fn push(repo_path: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let (local, remote_name, remote_branch) = upstream_parts(&repo)?;
+    let mut remote = repo
+        .find_remote(&remote_name)
+        .map_err(|_| GitError::Io(format!("No existe el remoto {remote_name}")))?;
+    let refspec = format!("refs/heads/{local}:refs/heads/{remote_branch}");
+    let mut options = git2::PushOptions::new();
+    options.remote_callbacks(remote_callbacks());
+    remote.push(&[refspec], Some(&mut options)).map_err(map_git)
+}
+
+pub fn clone_repository(url: &str, directory: &str) -> Result<RepositoryInfo, GitError> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(GitError::Io("La URL está vacía".into()));
+    }
+    let parent = Path::new(directory.trim());
+    if !parent.is_dir() {
+        return Err(GitError::Io("La carpeta de destino no existe".into()));
+    }
+    let name = repo_name_from_url(url)?;
+    let dest = parent.join(&name);
+    if dest.exists() {
+        let mut entries = std::fs::read_dir(&dest).map_err(|err| GitError::Io(err.to_string()))?;
+        if entries.next().is_some() {
+            return Err(GitError::Io(format!(
+                "La carpeta ya existe y no está vacía: {}",
+                dest.display()
+            )));
+        }
+        std::fs::remove_dir(&dest).map_err(|err| GitError::Io(err.to_string()))?;
+    }
+    let mut options = git2::FetchOptions::new();
+    options.remote_callbacks(remote_callbacks());
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(options);
+    builder.clone(url, &dest).map_err(map_git)?;
+    let dest_path = dest
+        .to_str()
+        .ok_or_else(|| GitError::Io("La ruta clonada no es UTF-8".into()))?;
+    open_repository(dest_path)
+}
+
+pub fn read_commit_file(repo_path: &str, sha: &str, file: &str) -> Result<String, GitError> {
+    let repo = discover(repo_path)?;
+    let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
+    let commit = repo.find_commit(oid).map_err(map_git)?;
+    let tree = commit.tree().map_err(map_git)?;
+    let entry = match tree.get_path(Path::new(file)) {
+        Ok(entry) => entry,
+        Err(_) => return Ok(format!("El commit no tiene {file}")),
+    };
+    let blob = match repo.find_blob(entry.id()) {
+        Ok(blob) => blob,
+        Err(_) => return Ok("No se puede mostrar este archivo.".into()),
+    };
+    if blob.is_binary() {
+        return Ok("Archivo binario, sin vista de texto.".into());
+    }
+    if blob.size() > FILE_BYTE_LIMIT {
+        return Ok("El archivo supera 1 MB y no se muestra.".into());
+    }
+    Ok(String::from_utf8_lossy(blob.content()).into_owned())
+}
+
+fn fetch_remote(repo: &Repository, remote_name: &str) -> Result<(), GitError> {
+    let mut remote = repo
+        .find_remote(remote_name)
+        .map_err(|_| GitError::Io(format!("No existe el remoto {remote_name}")))?;
+    let mut options = git2::FetchOptions::new();
+    options.remote_callbacks(remote_callbacks());
+    let specs: [&str; 0] = [];
+    remote
+        .fetch(&specs, Some(&mut options), None)
+        .map_err(map_git)
+}
+
+fn tracking_remote_name(repo: &Repository) -> Result<Option<String>, GitError> {
+    match upstream_parts(repo) {
+        Ok((_, remote_name, _)) => Ok(Some(remote_name)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn upstream_parts(repo: &Repository) -> Result<(String, String, String), GitError> {
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(err) if err.code() == git2::ErrorCode::UnbornBranch => {
+            return Err(GitError::Io("No hay commits".into()));
+        }
+        Err(err) => return Err(map_git(err)),
+    };
+    if !head.is_branch() {
+        return Err(GitError::Io("HEAD no está en una rama".into()));
+    }
+    let local = head.shorthand().unwrap_or("").to_string();
+    let branch = git2::Branch::wrap(head);
+    let upstream = branch
+        .upstream()
+        .map_err(|_| GitError::Io("La rama no tiene upstream".into()))?;
+    let full = upstream.name().map_err(map_git)?.unwrap_or("").to_string();
+    let Some((remote_name, remote_branch)) = full.split_once('/') else {
+        return Err(GitError::Io("La rama no tiene upstream".into()));
+    };
+    if remote_name.is_empty() || remote_branch.is_empty() {
+        return Err(GitError::Io("La rama no tiene upstream".into()));
+    }
+    Ok((local, remote_name.to_string(), remote_branch.to_string()))
+}
+
+fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed| {
+        if allowed.contains(git2::CredentialType::SSH_KEY) {
+            let user = username_from_url.unwrap_or("git");
+            if let Ok(cred) = git2::Cred::ssh_key_from_agent(user) {
+                return Ok(cred);
+            }
+        }
+        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
+            && let Some((user, password)) = git_credential_fill(url)
+        {
+            return git2::Cred::userpass_plaintext(&user, &password);
+        }
+        if allowed.contains(git2::CredentialType::DEFAULT) {
+            return git2::Cred::default();
+        }
+        Err(git2::Error::from_str(
+            "No hay credencial. Revisa el agente SSH o git credential.",
+        ))
+    });
+    callbacks
+}
+
+fn git_credential_fill(url: &str) -> Option<(String, String)> {
+    let (protocol, host) = https_host(url)?;
+    let mut child = Command::new("git")
+        .args(["credential", "fill"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    stdin
+        .write_all(format!("protocol={protocol}\nhost={host}\n\n").as_bytes())
+        .ok()?;
+    drop(stdin);
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let mut username = None;
+    let mut password = None;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("username=") {
+            username = Some(value.to_string());
+        }
+        if let Some(value) = line.strip_prefix("password=") {
+            password = Some(value.to_string());
+        }
+    }
+    Some((username?, password?))
+}
+
+fn https_host(url: &str) -> Option<(String, String)> {
+    let (protocol, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        ("https", rest)
+    } else {
+        let rest = url.strip_prefix("http://")?;
+        ("http", rest)
+    };
+    let without_user = rest.split_once('@').map(|(_, host)| host).unwrap_or(rest);
+    let host = without_user.split(['/', ':']).next()?.trim();
+    if host.is_empty() {
+        return None;
+    }
+    Some((protocol.to_string(), host.to_string()))
+}
+
+fn repo_name_from_url(url: &str) -> Result<String, GitError> {
+    let trimmed = url.trim().trim_end_matches('/');
+    let last = trimmed.rsplit(['/', ':']).next().unwrap_or("");
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if name.is_empty() || name == "." || name == ".." || name.contains("..") {
+        return Err(GitError::Io(
+            "No se pudo leer el nombre del repositorio".into(),
+        ));
+    }
+    Ok(name.to_string())
 }
 
 fn head_commit(repo: &Repository) -> Result<Option<git2::Commit<'_>>, GitError> {
@@ -763,5 +1001,60 @@ mod tests {
         assert_eq!(readme.kind, "modified");
         assert!(readme.patch.contains("@@"));
         assert!(!diff.truncated);
+    }
+
+    #[test]
+    fn clones_pushes_fetches_and_fast_forwards() {
+        let dir = scratch_dir();
+        let origin = dir.0.join("origin.git");
+        GitRepository::init_bare(&origin).expect("bare");
+
+        let source_path = dir.0.join("source");
+        let source = GitRepository::init(&source_path).expect("source");
+        let mut config = source.config().expect("config");
+        config.set_str("user.name", "Hydra").expect("name");
+        config
+            .set_str("user.email", "hydra@example.com")
+            .expect("email");
+        fs::write(source_path.join("README.md"), "uno\n").expect("write");
+        commit_all(&source, "first");
+
+        let info = open_repository(source_path.to_str().unwrap()).expect("open source");
+        let branch = info.current_branch.expect("branch");
+        source
+            .remote("origin", origin.to_str().unwrap())
+            .expect("remote");
+        let mut remote = source.find_remote("origin").expect("find remote");
+        remote
+            .push(&[format!("refs/heads/{branch}:refs/heads/{branch}")], None)
+            .expect("seed push");
+        let mut local = source
+            .find_branch(&branch, BranchType::Local)
+            .expect("local");
+        local
+            .set_upstream(Some(&format!("origin/{branch}")))
+            .expect("upstream");
+
+        let parent = dir.0.join("clones");
+        fs::create_dir_all(&parent).expect("clones");
+        let cloned =
+            clone_repository(origin.to_str().unwrap(), parent.to_str().unwrap()).expect("clone");
+        assert_eq!(cloned.name, "origin");
+
+        fs::write(source_path.join("README.md"), "dos\n").expect("update");
+        commit_all(&source, "second");
+        push(&info.path).expect("push");
+
+        fetch(&cloned.path).expect("fetch");
+        pull(&cloned.path).expect("pull");
+        let pulled = open_repository(&cloned.path).expect("pulled");
+        let text = read_commit_file(
+            &cloned.path,
+            pulled.head_sha.as_deref().expect("sha"),
+            "README.md",
+        )
+        .expect("file");
+        assert_eq!(text, "dos\n");
+        pull(&cloned.path).expect("already up to date");
     }
 }

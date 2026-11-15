@@ -68,7 +68,7 @@ export interface CommitDiff {
  * Puerto de lectura git. La UI y el servidor MCP hablan esta forma;
  * la implementación de escritorio vive en Rust (`git2`).
  *
- * Mutaciones que siguen fuera: fetch, pull, push y clonar.
+ * La terminal y el editor no pasan por este puerto.
  */
 export interface GitPort {
   openRepository(path: string): Promise<RepositoryInfo>;
@@ -90,4 +90,9 @@ export interface GitPort {
   checkoutBranch(path: string, name: string): Promise<void>;
   createBranch(path: string, name: string): Promise<void>;
   deleteBranch(path: string, name: string): Promise<void>;
+  fetch(path: string): Promise<void>;
+  pull(path: string): Promise<void>;
+  push(path: string): Promise<void>;
+  cloneRepository(url: string, directory: string): Promise<RepositoryInfo>;
+  readCommitFile(path: string, sha: string, file: string): Promise<string>;
 }

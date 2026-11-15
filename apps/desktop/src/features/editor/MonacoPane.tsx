@@ -10,10 +10,16 @@ self.MonacoEnvironment = {
   },
 };
 
-export default function MonacoPane({ value }: { value: string }) {
+export default function MonacoPane({
+  value,
+  language,
+}: {
+  value: string;
+  language: string;
+}) {
   return (
     <Editor
-      defaultLanguage="typescript"
+      language={language}
       theme="vs-dark"
       value={value}
       options={{

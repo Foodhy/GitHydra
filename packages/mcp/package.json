@@ -1,7 +1,7 @@
 {
   "name": "@githydra/mcp",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "bin": {
     "githydra-mcp": "./dist/index.js"

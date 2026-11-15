@@ -19,6 +19,8 @@ export function WelcomePage() {
   const [recents, setRecents] = useState<RecentRepo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneUrl, setCloneUrl] = useState("");
   const [desktopReady, setDesktopReady] = useState(true);
   const version = useAppVersion();
 
@@ -33,6 +35,36 @@ export function WelcomePage() {
     setError(null);
     try {
       const repo = await tauriGit.openRepository(path);
+      await rememberRecent(repo);
+      setInfo(repo);
+      await navigate({
+        to: "/repo/$",
+        params: { _splat: repo.path.replace(/^\/+/, "") },
+      });
+    } catch (reason: unknown) {
+      setError(toGitClientError(reason).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cloneRepo() {
+    const url = cloneUrl.trim();
+    if (!url) {
+      return;
+    }
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Carpeta donde clonar",
+    });
+    if (typeof selected !== "string") {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const repo = await tauriGit.cloneRepository(url, selected);
       await rememberRecent(repo);
       setInfo(repo);
       await navigate({
@@ -66,7 +98,7 @@ export function WelcomePage() {
         </p>
         <h1 className="mt-2 text-3xl font-semibold">Abrir un repositorio</h1>
         <p className="mt-2 text-sm text-muted">
-          Elige una carpeta git local. Clonar llega en una fase siguiente.
+          Elige una carpeta git local o clona una URL.
         </p>
         {error ? <p className="mt-4 text-sm text-warn">{error}</p> : null}
         {!desktopReady ? (
@@ -88,14 +120,38 @@ export function WelcomePage() {
           </button>
           <button
             type="button"
-            disabled
-            title="Clonar desde URL · próxima fase"
-            className="inline-flex items-center gap-2 rounded border border-line px-4 py-2 text-sm text-muted"
+            disabled={busy || !desktopReady}
+            onClick={() => setCloneOpen((current) => !current)}
+            className="inline-flex items-center gap-2 rounded border border-line px-4 py-2 text-sm"
           >
             <GitBranchPlus size={16} />
             Clonar desde URL
           </button>
         </div>
+        {cloneOpen ? (
+          <form
+            className="mt-4 flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void cloneRepo();
+            }}
+          >
+            <input
+              value={cloneUrl}
+              disabled={busy}
+              placeholder="https://… o git@…"
+              onChange={(event) => setCloneUrl(event.target.value)}
+              className="min-w-0 flex-1 rounded border border-line bg-surface-raised px-3 py-2 text-sm"
+            />
+            <button
+              type="submit"
+              disabled={busy || cloneUrl.trim().length === 0}
+              className="rounded bg-accent px-3 py-2 text-sm font-medium text-surface disabled:opacity-50"
+            >
+              Elegir carpeta
+            </button>
+          </form>
+        ) : null}
         <section className="mt-8">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
             Recientes

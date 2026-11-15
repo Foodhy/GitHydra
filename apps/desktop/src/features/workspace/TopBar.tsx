@@ -3,22 +3,50 @@ import {
   Archive,
   ArrowDownToLine,
   ArrowUpFromLine,
+  CloudDownload,
   FolderGit2,
   GitBranch,
   Redo2,
   SquareTerminal,
   Undo2,
 } from "lucide-react";
+import { useState } from "react";
 import { ToolButton } from "../../components/ToolButton";
 import { useAppVersion } from "../../hooks/useAppVersion";
+import { toGitClientError } from "../../lib/git/errors";
+import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { useRepoSession } from "../../stores/repo-session";
 
-export function TopBar() {
+export function TopBar({
+  path,
+  onRepositoryChanged,
+}: {
+  path: string;
+  onRepositoryChanged: () => Promise<void>;
+}) {
   const info = useRepoSession((state) => state.info);
   const version = useAppVersion();
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const branch = info?.isDetached
     ? "HEAD suelto"
     : (info?.currentBranch ?? "sin rama");
+
+  async function run(action: () => Promise<void>) {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      await action();
+      await onRepositoryChanged();
+    } catch (reason: unknown) {
+      setActionError(toGitClientError(reason).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-surface-raised px-3">
@@ -29,7 +57,12 @@ export function TopBar() {
         <p className="truncate text-sm font-medium">
           {info?.name ?? "GitHydra"}
         </p>
-        <p className="truncate text-[11px] text-muted">{branch}</p>
+        <p
+          className={`truncate text-[11px] ${actionError ? "text-warn" : "text-muted"}`}
+          title={actionError ?? undefined}
+        >
+          {actionError ?? branch}
+        </p>
       </div>
       <div className="mx-auto flex items-center gap-0.5">
         <ToolButton label="Deshacer">
@@ -38,10 +71,31 @@ export function TopBar() {
         <ToolButton label="Rehacer">
           <Redo2 size={16} />
         </ToolButton>
-        <ToolButton label="Pull">
+        <ToolButton
+          label="Fetch"
+          disabled={busy}
+          onClick={() => {
+            void run(() => tauriGit.fetch(path));
+          }}
+        >
+          <CloudDownload size={16} />
+        </ToolButton>
+        <ToolButton
+          label="Pull"
+          disabled={busy}
+          onClick={() => {
+            void run(() => tauriGit.pull(path));
+          }}
+        >
           <ArrowDownToLine size={16} />
         </ToolButton>
-        <ToolButton label="Push">
+        <ToolButton
+          label="Push"
+          disabled={busy}
+          onClick={() => {
+            void run(() => tauriGit.push(path));
+          }}
+        >
           <ArrowUpFromLine size={16} />
         </ToolButton>
         <ToolButton label="Branch">

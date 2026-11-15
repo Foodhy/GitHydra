@@ -42,4 +42,19 @@ export const tauriGit: GitPort = {
   deleteBranch(path, name) {
     return invoke<void>("delete_branch", { path, name });
   },
+  fetch(path) {
+    return invoke<void>("fetch", { path });
+  },
+  pull(path) {
+    return invoke<void>("pull", { path });
+  },
+  push(path) {
+    return invoke<void>("push", { path });
+  },
+  cloneRepository(url, directory) {
+    return invoke<RepositoryInfo>("clone_repository", { url, directory });
+  },
+  readCommitFile(path, sha, file) {
+    return invoke<string>("read_commit_file", { path, sha, file });
+  },
 };

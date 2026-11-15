@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-El paso activo es el **7**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.5.0`.
+El paso activo es el **11**. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.6.0`.
 
 ## Hecho — fase 0
 
@@ -41,21 +41,21 @@ Ya está en el primer commit:
 
 - [x] Alta y baja de ramas locales. El borrado pide confirmación y no borra la rama actual.
 
-### 7. Fetch, pull y push
+### 7. Fetch, pull y push — hecho en 0.6.0
 
-- [ ] Activar `https` y `ssh` en `git2`. Los botones de la barra dejan de ser decoración. Hace falta una credencial real para probarlo.
+- [x] Activar `https` y `ssh` en `git2`. Los botones de la barra dejan de ser decoración. Hace falta una credencial real para probarlo.
 
-### 8. Clonar por URL
+### 8. Clonar por URL — hecho en 0.6.0
 
-- [ ] El botón de la pantalla inicial deja de estar deshabilitado.
+- [x] El botón de la pantalla inicial deja de estar deshabilitado.
 
-### 9. Terminal con PTY
+### 9. Terminal con PTY — hecho en 0.6.0
 
-- [ ] La terminal de abajo ejecuta un shell en la carpeta del repo.
+- [x] La terminal de abajo ejecuta un shell en la carpeta del repo.
 
-### 10. Editor con el archivo del diff
+### 10. Editor con el archivo del diff — hecho en 0.6.0
 
-- [ ] El tab Editor abre el archivo seleccionado en el paso 1. Sigue en solo lectura.
+- [x] El tab Editor abre el archivo seleccionado en el paso 1. Sigue en solo lectura.
 
 ### 11. MCP que lee git
 
