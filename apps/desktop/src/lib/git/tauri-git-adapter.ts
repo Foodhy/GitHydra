@@ -4,6 +4,7 @@ import type {
   CommitPage,
   GitPort,
   RepositoryInfo,
+  WorkDiff,
   WorkingTreeStatus,
 } from "@githydra/contracts";
 import { invoke } from "@tauri-apps/api/core";
@@ -20,6 +21,9 @@ export const tauriGit: GitPort = {
   },
   workingTreeStatus(path) {
     return invoke<WorkingTreeStatus>("working_tree_status", { path });
+  },
+  workingTreeDiff(path, file, staged) {
+    return invoke<WorkDiff>("working_tree_diff", { path, file, staged });
   },
   commitDiff(path, sha) {
     return invoke<CommitDiff>("commit_diff", { path, sha });

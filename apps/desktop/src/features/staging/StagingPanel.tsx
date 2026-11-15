@@ -3,14 +3,19 @@ import { useState } from "react";
 import { useWorkingTree } from "../../hooks/useWorkingTree";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import type { WorkFile } from "../diff/WorkDiffPanel";
 
 export function StagingPanel({
   path,
   revision,
+  selected,
+  onSelect,
   onRepositoryChanged,
 }: {
   path: string;
   revision: number;
+  selected: WorkFile | null;
+  onSelect: (file: WorkFile) => void;
   onRepositoryChanged: () => Promise<void>;
 }) {
   const { entries, error, loading, reload } = useWorkingTree(path, revision);
@@ -34,6 +39,14 @@ export function StagingPanel({
         await tauriGit.stagePaths(path, filePaths);
       }
       reload();
+      if (
+        filePaths.length === 1 &&
+        selected &&
+        filePaths[0] === selected.path &&
+        selected.staged === fromStaged
+      ) {
+        onSelect({ path: selected.path, staged: !fromStaged });
+      }
     } catch (reason: unknown) {
       setActionError(toGitClientError(reason).message);
     } finally {
@@ -76,6 +89,8 @@ export function StagingPanel({
           title="Sin stage"
           entries={unstaged}
           busy={busy}
+          selected={selected}
+          onSelect={onSelect}
           onMove={(filePaths) => {
             void move(filePaths, false);
           }}
@@ -84,6 +99,8 @@ export function StagingPanel({
           title="En stage"
           entries={staged}
           busy={busy}
+          selected={selected}
+          onSelect={onSelect}
           onMove={(filePaths) => {
             void move(filePaths, true);
           }}
@@ -131,11 +148,15 @@ function FileGroup({
   title,
   entries,
   busy,
+  selected,
+  onSelect,
   onMove,
 }: {
   title: string;
   entries: WorkingTreeEntry[];
   busy: boolean;
+  selected: WorkFile | null;
+  onSelect: (file: WorkFile) => void;
   onMove: (paths: string[]) => void;
 }) {
   return (
@@ -159,21 +180,39 @@ function FileGroup({
         <p className="px-3 pb-2 text-xs text-muted">Vacío</p>
       ) : (
         <ul className="pb-2">
-          {entries.map((entry) => (
-            <li key={`${entry.staged ? "s" : "u"}:${entry.path}:${entry.kind}`}>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onMove([entry.path])}
-                className="flex w-full items-center gap-2 px-3 py-0.5 text-left font-mono text-xs hover:bg-surface-overlay disabled:opacity-60"
+          {entries.map((entry) => {
+            const active =
+              selected?.path === entry.path && selected.staged === entry.staged;
+            return (
+              <li
+                key={`${entry.staged ? "s" : "u"}:${entry.path}:${entry.kind}`}
+                className="flex items-center"
               >
-                <span className="w-4 text-warn">{kindMark(entry.kind)}</span>
-                <span className="truncate" title={entry.path}>
-                  {entry.path}
-                </span>
-              </button>
-            </li>
-          ))}
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSelect({ path: entry.path, staged: entry.staged })
+                  }
+                  className={`flex min-w-0 flex-1 items-center gap-2 px-3 py-0.5 text-left font-mono text-xs hover:bg-surface-overlay ${
+                    active ? "bg-surface-overlay" : ""
+                  }`}
+                >
+                  <span className="w-4 text-warn">{kindMark(entry.kind)}</span>
+                  <span className="truncate" title={entry.path}>
+                    {entry.path}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onMove([entry.path])}
+                  className="px-2 text-[11px] text-accent disabled:text-muted"
+                >
+                  {entry.staged ? "Quitar" : "Stage"}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

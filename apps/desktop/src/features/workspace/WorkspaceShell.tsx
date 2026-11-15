@@ -4,6 +4,7 @@ import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { useRepoSession } from "../../stores/repo-session";
 import { BranchPanel } from "../branches/BranchPanel";
 import { CommitDiffPanel } from "../diff/CommitDiffPanel";
+import { WorkDiffPanel, type WorkFile } from "../diff/WorkDiffPanel";
 import { EditorPanel } from "../editor/EditorPanel";
 import { HistoryPanel } from "../history/HistoryPanel";
 import { StagingPanel } from "../staging/StagingPanel";
@@ -18,11 +19,13 @@ export function WorkspaceShell({ path }: { path: string }) {
   const [tab, setTab] = useState<CenterTab>("history");
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
   const [editorFile, setEditorFile] = useState<string | null>(null);
+  const [workFile, setWorkFile] = useState<WorkFile | null>(null);
   const [trackedPath, setTrackedPath] = useState(path);
   if (trackedPath !== path) {
     setTrackedPath(path);
     setSelectedSha(null);
     setEditorFile(null);
+    setWorkFile(null);
   }
 
   async function refreshRepository() {
@@ -32,7 +35,14 @@ export function WorkspaceShell({ path }: { path: string }) {
   }
 
   function toggleCommit(sha: string) {
+    setWorkFile(null);
     setSelectedSha((current) => (current === sha ? null : sha));
+  }
+
+  function selectWorkFile(file: WorkFile) {
+    setSelectedSha(null);
+    setWorkFile(file);
+    setTab("history");
   }
 
   return (
@@ -54,8 +64,11 @@ export function WorkspaceShell({ path }: { path: string }) {
                 <section className="flex h-full min-w-0 flex-col">
                   <div className="flex gap-1 border-b border-line px-2 py-1">
                     <TabButton
-                      active={tab === "history"}
-                      onClick={() => setTab("history")}
+                      active={tab === "history" && !workFile}
+                      onClick={() => {
+                        setWorkFile(null);
+                        setTab("history");
+                      }}
                     >
                       Historial
                     </TabButton>
@@ -67,7 +80,13 @@ export function WorkspaceShell({ path }: { path: string }) {
                     </TabButton>
                   </div>
                   <div className="min-h-0 flex-1">
-                    {tab === "history" ? (
+                    {tab === "history" && workFile ? (
+                      <WorkDiffPanel
+                        path={path}
+                        file={workFile}
+                        onSelect={selectWorkFile}
+                      />
+                    ) : tab === "history" ? (
                       <HistoryPanel
                         path={path}
                         revision={revision}
@@ -97,6 +116,8 @@ export function WorkspaceShell({ path }: { path: string }) {
                   <StagingPanel
                     path={path}
                     revision={revision}
+                    selected={workFile}
+                    onSelect={selectWorkFile}
                     onRepositoryChanged={refreshRepository}
                   />
                 )}

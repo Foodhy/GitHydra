@@ -26,6 +26,15 @@ fn working_tree_status(path: String) -> Result<git::WorkingTreeStatus, git::GitE
 }
 
 #[tauri::command]
+fn working_tree_diff(
+    path: String,
+    file: String,
+    staged: bool,
+) -> Result<git::WorkDiff, git::GitError> {
+    git::working_tree_diff(&path, &file, staged)
+}
+
+#[tauri::command]
 fn commit_diff(path: String, sha: String) -> Result<git::CommitDiff, git::GitError> {
     git::commit_diff(&path, &sha)
 }
@@ -116,6 +125,7 @@ pub fn run() {
             list_branches,
             list_commits,
             working_tree_status,
+            working_tree_diff,
             commit_diff,
             stage_paths,
             unstage_paths,

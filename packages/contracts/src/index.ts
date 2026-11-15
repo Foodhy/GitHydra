@@ -64,6 +64,16 @@ export interface CommitDiff {
   truncated: boolean;
 }
 
+export interface WorkDiff {
+  path: string;
+  staged: boolean;
+  kind: string;
+  before: string;
+  after: string;
+  patch: string;
+  binary: boolean;
+}
+
 /**
  * Puerto de lectura git. La UI y el servidor MCP hablan esta forma;
  * la implementación de escritorio vive en Rust (`git2`).
@@ -79,6 +89,11 @@ export interface GitPort {
     cursor: string | null,
   ): Promise<CommitPage>;
   workingTreeStatus(path: string): Promise<WorkingTreeStatus>;
+  workingTreeDiff(
+    path: string,
+    file: string,
+    staged: boolean,
+  ): Promise<WorkDiff>;
   commitDiff(path: string, sha: string): Promise<CommitDiff>;
   stagePaths(path: string, paths: string[]): Promise<void>;
   unstagePaths(path: string, paths: string[]): Promise<void>;

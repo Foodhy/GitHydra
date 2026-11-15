@@ -77,6 +77,18 @@ pub struct CommitDiff {
     pub truncated: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkDiff {
+    pub path: String,
+    pub staged: bool,
+    pub kind: String,
+    pub before: String,
+    pub after: String,
+    pub patch: String,
+    pub binary: bool,
+}
+
 const PATCH_BYTE_LIMIT: usize = 200 * 1024;
 
 pub fn open_repository(path: &str) -> Result<RepositoryInfo, GitError> {
@@ -643,6 +655,134 @@ fn path_is_conflicted(repo: &Repository, file: &str) -> Result<bool, GitError> {
         .any(|entry| entry.status().is_conflicted() && entry.path() == Some(file)))
 }
 
+pub fn working_tree_diff(repo_path: &str, file: &str, staged: bool) -> Result<WorkDiff, GitError> {
+    let file = file.trim();
+    if file.is_empty() {
+        return Err(GitError::Io("Falta la ruta del archivo".into()));
+    }
+    let repo = discover(repo_path)?;
+    let before = if staged {
+        head_file_text(&repo, file)?
+    } else {
+        match index_file_text(&repo, file)? {
+            Some(text) => text,
+            None => head_file_text(&repo, file)?,
+        }
+    };
+    let after = if staged {
+        index_file_text(&repo, file)?.unwrap_or_else(missing_side)
+    } else {
+        workdir_file_text(&repo, file)?
+    };
+    let mut options = DiffOptions::new();
+    options
+        .pathspec(file)
+        .disable_pathspec_match(true)
+        .context_lines(3);
+    let diff = if staged {
+        let parent = head_commit(&repo)?;
+        let tree = match &parent {
+            Some(commit) => Some(commit.tree().map_err(map_git)?),
+            None => None,
+        };
+        let index = repo.index().map_err(map_git)?;
+        repo.diff_tree_to_index(tree.as_ref(), Some(&index), Some(&mut options))
+            .map_err(map_git)?
+    } else {
+        options.include_untracked(true).show_untracked_content(true);
+        repo.diff_index_to_workdir(None, Some(&mut options))
+            .map_err(map_git)?
+    };
+    let mut kind = "modified".to_string();
+    let mut binary = false;
+    let mut patch = String::new();
+    for index in 0..diff.deltas().len() {
+        let (file_path, _, delta_kind, is_binary) = delta_meta(&diff, index)?;
+        if file_path != file {
+            continue;
+        }
+        kind = delta_kind;
+        binary = is_binary;
+        patch = if is_binary {
+            "Archivo binario, sin parche de texto.\n".to_string()
+        } else {
+            let raw = patch_text(&diff, index);
+            if raw.len() > PATCH_BYTE_LIMIT {
+                let mut cut: String = raw.chars().take(PATCH_BYTE_LIMIT).collect();
+                cut.push_str("\nParche truncado.\n");
+                cut
+            } else {
+                raw
+            }
+        };
+        break;
+    }
+    let binary =
+        binary || before.starts_with("Archivo binario") || after.starts_with("Archivo binario");
+    Ok(WorkDiff {
+        path: file.to_string(),
+        staged,
+        kind,
+        before,
+        after,
+        patch,
+        binary,
+    })
+}
+
+fn missing_side() -> String {
+    "Este lado no tiene el archivo.\n".to_string()
+}
+
+fn head_file_text(repo: &Repository, file: &str) -> Result<String, GitError> {
+    let Some(commit) = head_commit(repo)? else {
+        return Ok(missing_side());
+    };
+    let tree = commit.tree().map_err(map_git)?;
+    match tree.get_path(Path::new(file)) {
+        Ok(entry) => blob_text(repo, entry.id()),
+        Err(_) => Ok(missing_side()),
+    }
+}
+
+fn index_file_text(repo: &Repository, file: &str) -> Result<Option<String>, GitError> {
+    let index = repo.index().map_err(map_git)?;
+    let Some(entry) = index.get_path(Path::new(file), 0) else {
+        return Ok(None);
+    };
+    Ok(Some(blob_text(repo, entry.id)?))
+}
+
+fn workdir_file_text(repo: &Repository, file: &str) -> Result<String, GitError> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Io("El repositorio no tiene directorio de trabajo".into()))?;
+    let full = workdir.join(file);
+    if !full.is_file() {
+        return Ok(missing_side());
+    }
+    let bytes = std::fs::read(&full).map_err(|err| GitError::Io(err.to_string()))?;
+    read_limited(&bytes)
+}
+
+fn blob_text(repo: &Repository, id: git2::Oid) -> Result<String, GitError> {
+    let blob = repo.find_blob(id).map_err(map_git)?;
+    if blob.is_binary() {
+        return Ok("Archivo binario, sin vista de texto.\n".into());
+    }
+    read_limited(blob.content())
+}
+
+fn read_limited(bytes: &[u8]) -> Result<String, GitError> {
+    if bytes.len() > FILE_BYTE_LIMIT {
+        return Ok("El archivo supera 1 MB y no se muestra.\n".into());
+    }
+    if bytes.contains(&0) {
+        return Ok("Archivo binario, sin vista de texto.\n".into());
+    }
+    Ok(String::from_utf8_lossy(bytes).into_owned())
+}
+
 pub fn commit_diff(path: &str, sha: &str) -> Result<CommitDiff, GitError> {
     let repo = discover(path)?;
     let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
@@ -1056,5 +1196,35 @@ mod tests {
         .expect("file");
         assert_eq!(text, "dos\n");
         pull(&cloned.path).expect("already up to date");
+    }
+
+    #[test]
+    fn shows_before_and_after_for_a_changed_file() {
+        let dir = scratch_dir();
+        let repo = GitRepository::init(&dir.0).expect("init");
+        let mut config = repo.config().expect("config");
+        config.set_str("user.name", "Hydra").expect("name");
+        config
+            .set_str("user.email", "hydra@example.com")
+            .expect("email");
+        fs::write(dir.0.join("README.md"), "uno\n").expect("write");
+        commit_all(&repo, "first");
+        fs::write(dir.0.join("README.md"), "dos\n").expect("edit");
+        fs::write(dir.0.join("notes.txt"), "pendiente\n").expect("notes");
+
+        let path = dir.0.to_str().unwrap();
+        let edited = working_tree_diff(path, "README.md", false).expect("edit diff");
+        assert!(edited.before.contains("uno"));
+        assert!(edited.after.contains("dos"));
+        assert!(edited.patch.contains("@@"));
+
+        stage_paths(path, &["README.md".to_string()]).expect("stage");
+        let staged = working_tree_diff(path, "README.md", true).expect("staged diff");
+        assert!(staged.before.contains("uno"));
+        assert!(staged.after.contains("dos"));
+
+        let added = working_tree_diff(path, "notes.txt", false).expect("new file");
+        assert!(added.before.contains("no tiene el archivo"));
+        assert!(added.after.contains("pendiente"));
     }
 }

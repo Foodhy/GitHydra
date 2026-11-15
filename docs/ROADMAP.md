@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.7.0`.
+No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.8.0`.
 
 ## Hecho — fase 0
 
@@ -68,6 +68,10 @@ Ya está en el primer commit:
 ### 13. Preferencias visuales — hecho en 0.7.0
 
 - [x] Seis estilos, color de acento y una vista previa. La elección se guarda y se vuelve a leer.
+
+### 14. Diff del árbol — hecho en 0.8.0
+
+- [x] Clic en un archivo muestra el antes y el después. Se puede cambiar de vista y pasar al siguiente. Stage queda en su botón.
 
 ## StealThis
 
