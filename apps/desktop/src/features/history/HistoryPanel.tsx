@@ -6,6 +6,7 @@ import { useCommitLog } from "../../hooks/useCommitLog";
 import { formatWhen, subjectOf } from "../../lib/format";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { branchColor } from "../graph/colors";
 import { CommitGraph } from "../graph/GraphPanel";
 import { GRAPH_ROW_HEIGHT } from "../graph/layout";
 
@@ -57,6 +58,7 @@ export function HistoryPanel({
           {commits.length > 0 ? (
             <CommitGraph
               commits={commits}
+              branches={branches}
               selectedSha={selectedSha}
               onOpen={openCommit}
             />
@@ -182,25 +184,33 @@ export function HistoryPanel({
 }
 
 function BranchPills({ tips }: { tips: BranchRef[] }) {
-  const shown = tips.slice(0, 2);
-  const extra = tips.length - shown.length;
-  if (shown.length === 0) {
+  const shown = [...tips].sort(
+    (left, right) => Number(right.isHead) - Number(left.isHead),
+  );
+  const visible = shown.slice(0, 3);
+  const extra = shown.length - visible.length;
+  if (visible.length === 0) {
     return null;
   }
   return (
     <span className="flex shrink-0 items-center gap-1">
-      {shown.map((branch) => (
-        <span
-          key={`${branch.remote ?? "local"}:${branch.name}`}
-          className={`max-w-28 truncate rounded px-1.5 py-0.5 text-[10px] font-medium ${
-            branch.isHead
-              ? "bg-accent-dim text-accent"
-              : "bg-surface-overlay text-graph-edge"
-          }`}
-        >
-          {branch.name}
-        </span>
-      ))}
+      {visible.map((branch) => {
+        const color = branchColor(branch.name, branch.isHead);
+        return (
+          <span
+            key={`${branch.remote ?? "local"}:${branch.name}`}
+            title={branch.name}
+            className="inline-flex max-w-36 items-center gap-1 truncate rounded bg-surface-overlay px-1.5 py-0.5 text-[10px] font-medium"
+            style={{ color }}
+          >
+            <span
+              className="size-1.5 shrink-0 rounded-full"
+              style={{ background: color }}
+            />
+            <span className="truncate">{branch.name}</span>
+          </span>
+        );
+      })}
       {extra > 0 ? (
         <span className="text-[10px] text-muted">+{extra}</span>
       ) : null}

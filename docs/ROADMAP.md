@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.11.0`.
+No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.12.0`.
 
 ## Hecho — fase 0
 
@@ -84,6 +84,10 @@ Ya está en el primer commit:
 ### 17. Formato y acciones — hecho en 0.11.0
 
 - [x] El diff muestra números de línea y el árbol agrupa los archivos. Se puede renombrar una rama, guardar su upstream, crear un tag y hacer checkout de un commit.
+
+### 18. Sintaxis del diff — hecho en 0.12.0
+
+- [x] El diff de un commit y el del árbol se pintan según la extensión. Cada rama del grafo conserva su color.
 
 ### Más adelante, en ese mismo menú
 

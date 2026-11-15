@@ -2,7 +2,8 @@ import type { CommitDiff, CommitDiffFile } from "@githydra/contracts";
 import { useEffect, useState } from "react";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
-import { PatchView } from "./PatchView";
+import { CodeDiff, noteOf } from "./CodeDiff";
+import { sidesFromPatch } from "./PatchView";
 
 export function CommitDiffPanel({
   path,
@@ -96,12 +97,32 @@ export function CommitDiffPanel({
               El parche supera el límite y está truncado.
             </p>
           ) : null}
-          <div className="min-h-0 flex-1 overflow-auto">
-            {file ? <PatchView patch={file.patch} mode="unido" /> : null}
+          <div className="min-h-0 flex-1">
+            {file ? <CommitBody file={file} /> : null}
           </div>
         </>
       ) : null}
     </aside>
+  );
+}
+
+function CommitBody({ file }: { file: CommitDiffFile }) {
+  const note = noteOf(file.patch);
+  const sides = sidesFromPatch(file.patch);
+  if (note || !sides) {
+    return (
+      <p className="px-3 py-2 text-xs text-muted">
+        {file.patch.trim() || "Sin cambios de texto."}
+      </p>
+    );
+  }
+  return (
+    <CodeDiff
+      filePath={file.path}
+      before={sides.before}
+      after={sides.after}
+      mode="unido"
+    />
   );
 }
 

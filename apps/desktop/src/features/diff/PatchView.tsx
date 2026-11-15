@@ -238,6 +238,25 @@ function asSplit(line: PatchLine): SplitRow {
   };
 }
 
+export function sidesFromPatch(patch: string): {
+  before: string;
+  after: string;
+} | null {
+  const lines = parsePatch(patch);
+  if (lines.every((line) => line.kind === "hunk")) {
+    return null;
+  }
+  const before = lines
+    .filter((line) => line.oldNo !== null)
+    .map((line) => line.text)
+    .join("\n");
+  const after = lines
+    .filter((line) => line.newNo !== null)
+    .map((line) => line.text)
+    .join("\n");
+  return { before, after };
+}
+
 function parsePatch(patch: string): PatchLine[] {
   const lines: PatchLine[] = [];
   let oldNo = 0;

@@ -1,5 +1,5 @@
 export const GRAPH_ROW_HEIGHT = 32;
-export const GRAPH_COLUMN_WIDTH = 16;
+export const GRAPH_COLUMN_WIDTH = 22;
 export const GRAPH_PAD = 12;
 
 export interface GraphCommit {

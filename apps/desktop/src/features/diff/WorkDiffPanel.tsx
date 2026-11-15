@@ -2,7 +2,7 @@ import type { WorkDiff } from "@githydra/contracts";
 import { useEffect, useState } from "react";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
-import { PatchView } from "./PatchView";
+import { CodeDiff, noteOf, sideText } from "./CodeDiff";
 
 export interface WorkFile {
   path: string;
@@ -133,10 +133,38 @@ export function WorkDiffPanel({
         <p className="px-3 py-2 text-xs text-muted">Leyendo el cambio…</p>
       ) : null}
       {diff ? (
-        <div className="min-h-0 flex-1 overflow-auto">
-          <PatchView patch={diff.patch} mode={view} />
+        <div className="min-h-0 flex-1">
+          <WorkBody file={file.path} diff={diff} view={view} />
         </div>
       ) : null}
     </section>
+  );
+}
+
+function WorkBody({
+  file,
+  diff,
+  view,
+}: {
+  file: string;
+  diff: WorkDiff;
+  view: DiffView;
+}) {
+  const note = diff.binary
+    ? noteOf(diff.patch) ||
+      noteOf(diff.before) ||
+      noteOf(diff.after) ||
+      diff.patch
+    : noteOf(diff.before) || noteOf(diff.after);
+  if (note) {
+    return <p className="px-3 py-2 text-xs text-muted">{note}</p>;
+  }
+  return (
+    <CodeDiff
+      filePath={file}
+      before={sideText(diff.before)}
+      after={sideText(diff.after)}
+      mode={view}
+    />
   );
 }
