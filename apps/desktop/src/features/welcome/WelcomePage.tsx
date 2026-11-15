@@ -66,8 +66,7 @@ export function WelcomePage() {
         </p>
         <h1 className="mt-2 text-3xl font-semibold">Abrir un repositorio</h1>
         <p className="mt-2 text-sm text-muted">
-          Elige una carpeta git local. Clonar, el grafo y el commit llegan en
-          fases siguientes; el espacio para cada uno ya está en el workspace.
+          Elige una carpeta git local. Clonar llega en una fase siguiente.
         </p>
         {error ? <p className="mt-4 text-sm text-warn">{error}</p> : null}
         {!desktopReady ? (

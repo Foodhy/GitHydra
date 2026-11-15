@@ -7,15 +7,20 @@ import { GRAPH_ROW_HEIGHT } from "../graph/layout";
 
 export function HistoryPanel({
   path,
+  revision,
   selectedSha,
   onSelect,
 }: {
   path: string;
+  revision: number;
   selectedSha: string | null;
   onSelect: (sha: string) => void;
 }) {
-  const { commits, cursor, loading, error, loadMore } = useCommitLog(path);
-  const { branches } = useBranches(path);
+  const { commits, cursor, loading, error, loadMore } = useCommitLog(
+    path,
+    revision,
+  );
+  const { branches } = useBranches(path, revision);
 
   return (
     <div className="flex h-full min-w-0 flex-col">

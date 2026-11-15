@@ -30,4 +30,16 @@ export const tauriGit: GitPort = {
   unstagePaths(path, paths) {
     return invoke<void>("unstage_paths", { path, paths });
   },
+  createCommit(path, summary, description) {
+    return invoke<void>("create_commit", { path, summary, description });
+  },
+  checkoutBranch(path, name) {
+    return invoke<void>("checkout_branch", { path, name });
+  },
+  createBranch(path, name) {
+    return invoke<void>("create_branch", { path, name });
+  },
+  deleteBranch(path, name) {
+    return invoke<void>("delete_branch", { path, name });
+  },
 };

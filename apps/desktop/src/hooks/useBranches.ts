@@ -3,13 +3,13 @@ import { useEffect, useState } from "react";
 import { toGitClientError } from "../lib/git/errors";
 import { tauriGit } from "../lib/git/tauri-git-adapter";
 
-export function useBranches(path: string | null) {
+export function useBranches(path: string | null, revision = 0) {
   const [branches, setBranches] = useState<BranchRef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!path) {
+    if (!path || revision < 0) {
       return;
     }
     let cancelled = false;
@@ -35,7 +35,7 @@ export function useBranches(path: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, revision]);
 
   return { branches, error, loading };
 }

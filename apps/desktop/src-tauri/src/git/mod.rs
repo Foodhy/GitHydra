@@ -288,6 +288,111 @@ pub fn unstage_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> 
     }
 }
 
+pub fn create_commit(repo_path: &str, summary: &str, description: &str) -> Result<(), GitError> {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err(GitError::Io("El resumen del commit está vacío".into()));
+    }
+    let repo = discover(repo_path)?;
+    if !index_has_changes(&repo)? {
+        return Err(GitError::Io("No hay cambios en stage".into()));
+    }
+    let signature = repo.signature().map_err(|_| {
+        GitError::Io("Falta user.name o user.email en la configuración de git".into())
+    })?;
+    let mut index = repo.index().map_err(map_git)?;
+    let tree_id = index.write_tree().map_err(map_git)?;
+    let tree = repo.find_tree(tree_id).map_err(map_git)?;
+    let parent = head_commit(&repo)?;
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    let description = description.trim();
+    let message = if description.is_empty() {
+        summary.to_string()
+    } else {
+        format!("{summary}\n\n{description}")
+    };
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        &message,
+        &tree,
+        &parents,
+    )
+    .map_err(map_git)?;
+    Ok(())
+}
+
+pub fn checkout_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let branch_name = name.trim();
+    let branch = repo
+        .find_branch(branch_name, BranchType::Local)
+        .map_err(|_| GitError::Io(format!("No existe la rama local: {branch_name}")))?;
+    if branch.is_head() {
+        return Ok(());
+    }
+    let object = branch
+        .get()
+        .peel(git2::ObjectType::Commit)
+        .map_err(map_git)?;
+    let refname = branch
+        .get()
+        .name()
+        .ok_or_else(|| GitError::Io(format!("La rama no tiene nombre: {branch_name}")))?
+        .to_string();
+    repo.checkout_tree(&object, None).map_err(map_git)?;
+    repo.set_head(&refname).map_err(map_git)
+}
+
+pub fn create_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let branch_name = name.trim();
+    let refname = format!("refs/heads/{branch_name}");
+    if branch_name.is_empty() || !git2::Reference::is_valid_name(&refname) {
+        return Err(GitError::Io(format!(
+            "Nombre de rama inválido: {branch_name}"
+        )));
+    }
+    let commit = head_commit(&repo)?
+        .ok_or_else(|| GitError::Io("No hay commits para crear la rama".into()))?;
+    repo.branch(branch_name, &commit, false).map_err(map_git)?;
+    Ok(())
+}
+
+pub fn delete_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let branch_name = name.trim();
+    let mut branch = repo
+        .find_branch(branch_name, BranchType::Local)
+        .map_err(|_| GitError::Io(format!("No existe la rama local: {branch_name}")))?;
+    if branch.is_head() {
+        return Err(GitError::Io("No se puede borrar la rama actual".into()));
+    }
+    branch.delete().map_err(map_git)
+}
+
+fn head_commit(repo: &Repository) -> Result<Option<git2::Commit<'_>>, GitError> {
+    match repo.head() {
+        Ok(reference) => Ok(Some(reference.peel_to_commit().map_err(map_git)?)),
+        Err(err) if err.code() == git2::ErrorCode::UnbornBranch => Ok(None),
+        Err(err) => Err(map_git(err)),
+    }
+}
+
+fn index_has_changes(repo: &Repository) -> Result<bool, GitError> {
+    let head = head_commit(repo)?;
+    let head_tree = match head {
+        Some(commit) => Some(commit.tree().map_err(map_git)?),
+        None => None,
+    };
+    let index = repo.index().map_err(map_git)?;
+    let diff = repo
+        .diff_tree_to_index(head_tree.as_ref(), Some(&index), None)
+        .map_err(map_git)?;
+    Ok(diff.deltas().len() > 0)
+}
+
 fn path_is_conflicted(repo: &Repository, file: &str) -> Result<bool, GitError> {
     let mut options = StatusOptions::new();
     options
@@ -501,10 +606,6 @@ fn worktree_kind(status: Status) -> Option<&'static str> {
     None
 }
 
-// Mutaciones (stage, commit, checkout) quedan fuera de esta fase.
-// Cuando existan, deben devolver `GitError::NotImplemented` hasta tener
-// una implementación real, en lugar de escribir el índice a medias.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +714,44 @@ mod tests {
         assert!(unstaged.entries.iter().any(|entry| {
             entry.path == "notes.txt" && !entry.staged && entry.kind == "untracked"
         }));
+
+        let mut config = repo.config().expect("config");
+        config.set_str("user.name", "Hydra").expect("name");
+        config
+            .set_str("user.email", "hydra@example.com")
+            .expect("email");
+
+        let before = open_repository(&info.path).expect("before").head_sha;
+        let empty = create_commit(&info.path, "vacío", "").expect_err("sin stage");
+        assert_eq!(empty.code(), "IO_ERROR");
+        assert_eq!(open_repository(&info.path).expect("same").head_sha, before);
+
+        stage_paths(&info.path, &["notes.txt".to_string()]).expect("stage notes");
+        create_commit(&info.path, "Anota", "detalle").expect("commit");
+        let committed = list_commits(&info.path, 1, None).expect("committed");
+        assert_eq!(committed.commits[0].message, "Anota\n\ndetalle");
+        let clean = working_tree_status(&info.path).expect("clean");
+        assert!(!clean.entries.iter().any(|entry| entry.path == "notes.txt"));
+
+        let current = open_repository(&info.path)
+            .expect("current")
+            .current_branch
+            .expect("branch name");
+        create_branch(&info.path, "side").expect("create side");
+        checkout_branch(&info.path, "side").expect("checkout side");
+        assert_eq!(
+            open_repository(&info.path)
+                .expect("on side")
+                .current_branch
+                .as_deref(),
+            Some("side")
+        );
+        checkout_branch(&info.path, &current).expect("checkout back");
+        delete_branch(&info.path, "side").expect("delete side");
+        let after_delete = list_branches(&info.path).expect("after delete");
+        assert!(!after_delete.iter().any(|branch| branch.name == "side"));
+        let kept = delete_branch(&info.path, &current).expect_err("keep head");
+        assert_eq!(kept.code(), "IO_ERROR");
 
         let sha = info.head_sha.expect("head");
         let diff = commit_diff(&info.path, &sha).expect("diff");

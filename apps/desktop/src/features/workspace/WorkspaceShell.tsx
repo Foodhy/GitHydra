@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { useRepoSession } from "../../stores/repo-session";
 import { BranchPanel } from "../branches/BranchPanel";
 import { CommitDiffPanel } from "../diff/CommitDiffPanel";
 import { EditorPanel } from "../editor/EditorPanel";
@@ -11,12 +13,20 @@ import { TopBar } from "./TopBar";
 type CenterTab = "history" | "editor";
 
 export function WorkspaceShell({ path }: { path: string }) {
+  const setInfo = useRepoSession((state) => state.setInfo);
+  const [revision, setRevision] = useState(0);
   const [tab, setTab] = useState<CenterTab>("history");
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
   const [trackedPath, setTrackedPath] = useState(path);
   if (trackedPath !== path) {
     setTrackedPath(path);
     setSelectedSha(null);
+  }
+
+  async function refreshRepository() {
+    const repo = await tauriGit.openRepository(path);
+    setInfo(repo);
+    setRevision((current) => current + 1);
   }
 
   function toggleCommit(sha: string) {
@@ -31,7 +41,11 @@ export function WorkspaceShell({ path }: { path: string }) {
           <Panel defaultSize={78} minSize={40}>
             <PanelGroup autoSaveId="githydra-cols" direction="horizontal">
               <Panel defaultSize={20} minSize={14} className="min-w-0">
-                <BranchPanel path={path} />
+                <BranchPanel
+                  path={path}
+                  revision={revision}
+                  onRepositoryChanged={refreshRepository}
+                />
               </Panel>
               <PanelResizeHandle className="w-px bg-line" />
               <Panel defaultSize={52} minSize={30} className="min-w-0">
@@ -54,6 +68,7 @@ export function WorkspaceShell({ path }: { path: string }) {
                     {tab === "history" ? (
                       <HistoryPanel
                         path={path}
+                        revision={revision}
                         selectedSha={selectedSha}
                         onSelect={toggleCommit}
                       />
@@ -72,7 +87,11 @@ export function WorkspaceShell({ path }: { path: string }) {
                     onClear={() => setSelectedSha(null)}
                   />
                 ) : (
-                  <StagingPanel path={path} />
+                  <StagingPanel
+                    path={path}
+                    revision={revision}
+                    onRepositoryChanged={refreshRepository}
+                  />
                 )}
               </Panel>
             </PanelGroup>

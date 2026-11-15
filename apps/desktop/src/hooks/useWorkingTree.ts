@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { toGitClientError } from "../lib/git/errors";
 import { tauriGit } from "../lib/git/tauri-git-adapter";
 
-export function useWorkingTree(path: string | null) {
+export function useWorkingTree(path: string | null, revision = 0) {
   const [entries, setEntries] = useState<WorkingTreeEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -13,14 +13,14 @@ export function useWorkingTree(path: string | null) {
     if (!path) {
       return;
     }
-    const loadId = generation;
+    const loadId = generation + revision;
     let cancelled = false;
     setLoading(true);
     setError(null);
     tauriGit
       .workingTreeStatus(path)
       .then((status) => {
-        if (!cancelled && loadId === generation) {
+        if (!cancelled && loadId === generation + revision) {
           setEntries(status.entries);
         }
       })
@@ -37,7 +37,7 @@ export function useWorkingTree(path: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [path, generation]);
+  }, [path, generation, revision]);
 
   function reload() {
     setGeneration((current) => current + 1);

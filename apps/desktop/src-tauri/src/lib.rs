@@ -39,6 +39,26 @@ fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), git::GitError> 
     git::unstage_paths(&path, &paths)
 }
 
+#[tauri::command]
+fn create_commit(path: String, summary: String, description: String) -> Result<(), git::GitError> {
+    git::create_commit(&path, &summary, &description)
+}
+
+#[tauri::command]
+fn checkout_branch(path: String, name: String) -> Result<(), git::GitError> {
+    git::checkout_branch(&path, &name)
+}
+
+#[tauri::command]
+fn create_branch(path: String, name: String) -> Result<(), git::GitError> {
+    git::create_branch(&path, &name)
+}
+
+#[tauri::command]
+fn delete_branch(path: String, name: String) -> Result<(), git::GitError> {
+    git::delete_branch(&path, &name)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -52,7 +72,11 @@ pub fn run() {
             working_tree_status,
             commit_diff,
             stage_paths,
-            unstage_paths
+            unstage_paths,
+            create_commit,
+            checkout_branch,
+            create_branch,
+            delete_branch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

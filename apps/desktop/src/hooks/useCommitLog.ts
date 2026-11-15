@@ -5,14 +5,14 @@ import { tauriGit } from "../lib/git/tauri-git-adapter";
 
 const PAGE = 80;
 
-export function useCommitLog(path: string | null) {
+export function useCommitLog(path: string | null, revision = 0) {
   const [commits, setCommits] = useState<CommitSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!path) {
+    if (!path || revision < 0) {
       return;
     }
     let cancelled = false;
@@ -42,7 +42,7 @@ export function useCommitLog(path: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, revision]);
 
   async function loadMore() {
     if (!path || !cursor || loading) {

@@ -4,10 +4,20 @@ import { useWorkingTree } from "../../hooks/useWorkingTree";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
 
-export function StagingPanel({ path }: { path: string }) {
-  const { entries, error, loading, reload } = useWorkingTree(path);
+export function StagingPanel({
+  path,
+  revision,
+  onRepositoryChanged,
+}: {
+  path: string;
+  revision: number;
+  onRepositoryChanged: () => Promise<void>;
+}) {
+  const { entries, error, loading, reload } = useWorkingTree(path, revision);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [summary, setSummary] = useState("");
+  const [description, setDescription] = useState("");
   const unstaged = entries.filter((entry) => !entry.staged);
   const staged = entries.filter((entry) => entry.staged);
 
@@ -24,6 +34,25 @@ export function StagingPanel({ path }: { path: string }) {
         await tauriGit.stagePaths(path, filePaths);
       }
       reload();
+    } catch (reason: unknown) {
+      setActionError(toGitClientError(reason).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmCommit() {
+    const nextSummary = summary.trim();
+    if (!nextSummary || busy) {
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      await tauriGit.createCommit(path, nextSummary, description.trim());
+      setSummary("");
+      setDescription("");
+      await onRepositoryChanged();
     } catch (reason: unknown) {
       setActionError(toGitClientError(reason).message);
     } finally {
@@ -62,28 +91,34 @@ export function StagingPanel({ path }: { path: string }) {
       </div>
       <form
         className="border-t border-line p-3"
-        onSubmit={(event) => event.preventDefault()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void confirmCommit();
+        }}
       >
         <input
-          disabled
+          value={summary}
+          disabled={busy}
           placeholder="Resumen del commit"
-          className="mb-2 w-full rounded border border-line bg-surface px-2 py-1.5 text-sm text-muted"
+          onChange={(event) => setSummary(event.target.value)}
+          className="mb-2 w-full rounded border border-line bg-surface px-2 py-1.5 text-sm disabled:text-muted"
         />
         <textarea
-          disabled
+          value={description}
+          disabled={busy}
           rows={3}
           placeholder="Descripción"
-          className="mb-2 w-full resize-none rounded border border-line bg-surface px-2 py-1.5 text-sm text-muted"
+          onChange={(event) => setDescription(event.target.value)}
+          className="mb-2 w-full resize-none rounded border border-line bg-surface px-2 py-1.5 text-sm disabled:text-muted"
         />
         <label className="mb-2 flex items-center gap-2 text-xs text-muted">
           <input type="checkbox" disabled />
           Enmendar el commit anterior
         </label>
         <button
-          type="button"
-          disabled
-          title="Confirmar · próxima fase"
-          className="w-full rounded bg-accent/40 px-3 py-2 text-sm font-medium text-surface"
+          type="submit"
+          disabled={busy || summary.trim().length === 0}
+          className="w-full rounded bg-accent px-3 py-2 text-sm font-medium text-surface disabled:bg-accent/40"
         >
           Confirmar
         </button>
