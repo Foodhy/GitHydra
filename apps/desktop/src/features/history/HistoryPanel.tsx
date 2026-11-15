@@ -48,9 +48,6 @@ export function HistoryPanel({
 
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <header className="border-b border-line px-3 py-2 text-xs font-medium tracking-wide text-muted uppercase">
-        Historial
-      </header>
       <div className="min-h-0 flex-1 overflow-auto">
         {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
         {actionError ? (
@@ -144,6 +141,33 @@ export function HistoryPanel({
   }
 }
 
+function BranchPills({ tips }: { tips: BranchRef[] }) {
+  const shown = tips.slice(0, 2);
+  const extra = tips.length - shown.length;
+  if (shown.length === 0) {
+    return null;
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      {shown.map((branch) => (
+        <span
+          key={`${branch.remote ?? "local"}:${branch.name}`}
+          className={`max-w-28 truncate rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            branch.isHead
+              ? "bg-accent-dim text-accent"
+              : "bg-surface-overlay text-graph-edge"
+          }`}
+        >
+          {branch.name}
+        </span>
+      ))}
+      {extra > 0 ? (
+        <span className="text-[10px] text-muted">+{extra}</span>
+      ) : null}
+    </span>
+  );
+}
+
 function CommitRow({
   commit,
   branches,
@@ -157,39 +181,27 @@ function CommitRow({
 }) {
   const tips = branches.filter((branch) => branch.tipSha === commit.sha);
   return (
-    <li className="border-b border-line/70">
+    <li>
       <button
         type="button"
         onClick={(event) => onOpen(commit.sha, event)}
         style={{ height: GRAPH_ROW_HEIGHT }}
-        className={`flex w-full flex-col justify-center overflow-hidden px-3 text-left ${selected ? "bg-accent-dim" : "hover:bg-surface-overlay"}`}
+        className={`box-border flex w-full items-center gap-2 overflow-hidden border-b border-line/70 px-3 text-left ${
+          selected
+            ? "bg-accent-dim shadow-[inset_2px_0_0_var(--color-accent)]"
+            : "hover:bg-surface-overlay"
+        }`}
       >
-        <div className="flex items-start gap-3">
-          <p className="min-w-0 flex-1 truncate text-xs" title={commit.message}>
-            {subjectOf(commit.message)}
-          </p>
-          <span className="shrink-0 font-mono text-[11px] text-muted">
-            {commit.shortSha}
-          </span>
-        </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
-          <span>
-            {commit.authorName || "desconocido"} ·{" "}
-            {formatWhen(commit.authoredAt)}
-          </span>
-          {tips.map((branch) => (
-            <span
-              key={`${branch.remote ?? "local"}:${branch.name}`}
-              className={`rounded px-1.5 py-0.5 font-medium ${
-                branch.isHead
-                  ? "bg-accent-dim text-accent"
-                  : "bg-surface-overlay text-graph-edge"
-              }`}
-            >
-              {branch.name}
-            </span>
-          ))}
-        </div>
+        <p className="min-w-0 flex-1 truncate text-xs" title={commit.message}>
+          {subjectOf(commit.message)}
+        </p>
+        <BranchPills tips={tips} />
+        <span className="max-w-40 shrink-0 truncate text-[11px] text-muted">
+          {commit.authorName || "desconocido"} · {formatWhen(commit.authoredAt)}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] text-muted">
+          {commit.shortSha}
+        </span>
       </button>
     </li>
   );

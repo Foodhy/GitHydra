@@ -1,4 +1,5 @@
 import type { BranchRef } from "@githydra/contracts";
+import { GitBranch, Plus } from "lucide-react";
 import { type MouseEvent, useState } from "react";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useBranches } from "../../hooks/useBranches";
@@ -18,15 +19,28 @@ export function BranchPanel({
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState("");
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
     items: MenuItem[];
   } | null>(null);
-  const local = branches.filter((branch) => branch.remote === null);
+  const needle = query.trim().toLowerCase();
+  const visible = branches.filter((branch) =>
+    shortName(branch).toLowerCase().includes(needle),
+  );
+  const local = visible
+    .filter((branch) => branch.remote === null)
+    .sort(
+      (left, right) =>
+        Number(right.isHead) - Number(left.isHead) ||
+        shortName(left).localeCompare(shortName(right)),
+    );
   const remoteNames = [
     ...new Set(
-      branches.flatMap((branch) => (branch.remote ? [branch.remote] : [])),
+      visible.flatMap((branch) => (branch.remote ? [branch.remote] : [])),
     ),
   ];
 
@@ -46,26 +60,38 @@ export function BranchPanel({
     }
   }
 
+  function openMenu(branch: BranchRef, event: MouseEvent) {
+    setMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: branchItems(branch),
+    });
+  }
+
   return (
     <aside className="flex h-full flex-col bg-surface-raised">
-      <header className="border-b border-line px-3 py-2 text-xs font-medium tracking-wide text-muted uppercase">
-        Ramas
-      </header>
-      <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
-        {loading && branches.length === 0 ? (
-          <p className="px-2 text-xs text-muted">Cargando…</p>
-        ) : null}
-        {error ? <p className="px-2 text-xs text-warn">{error}</p> : null}
-        {actionError ? (
-          <p className="px-2 text-xs text-warn">{actionError}</p>
-        ) : null}
-        <BranchGroup
-          title="Local"
-          branches={local}
-          busy={busy}
-          draft={name}
-          onDraft={setName}
-          onCreate={() => {
+      <div className="flex items-center gap-1 border-b border-line px-2 py-1.5">
+        <input
+          value={query}
+          placeholder="Filtrar ramas"
+          onChange={(event) => setQuery(event.target.value)}
+          className="min-w-0 flex-1 bg-transparent px-1 py-1 text-xs outline-none placeholder:text-muted"
+        />
+        <button
+          type="button"
+          title="Nueva rama"
+          aria-label="Nueva rama"
+          onClick={() => setCreating((open) => !open)}
+          className="rounded p-1 text-muted hover:bg-surface-overlay hover:text-text"
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      {creating ? (
+        <form
+          className="flex gap-1 border-b border-line px-2 py-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
             const nextName = name.trim();
             if (!nextName) {
               return;
@@ -73,32 +99,64 @@ export function BranchPanel({
             void run(async () => {
               await tauriGit.createBranch(path, nextName);
               setName("");
+              setCreating(false);
             });
           }}
-          onOpen={(branch, event) => {
-            setMenu({
-              x: event.clientX,
-              y: event.clientY,
-              items: branchItems(branch),
-            });
-          }}
-        />
+        >
+          <input
+            value={name}
+            disabled={busy}
+            placeholder="Nueva rama"
+            onChange={(event) => setName(event.target.value)}
+            className="min-w-0 flex-1 rounded border border-line bg-surface px-2 py-1 text-xs"
+          />
+          <button
+            type="submit"
+            disabled={busy || name.trim().length === 0}
+            className="rounded px-2 py-1 text-xs text-accent disabled:text-muted"
+          >
+            Crear
+          </button>
+        </form>
+      ) : null}
+      <div className="min-h-0 flex-1 overflow-auto py-1">
+        {loading && branches.length === 0 ? (
+          <p className="px-3 text-xs text-muted">Cargando…</p>
+        ) : null}
+        {error ? <p className="px-3 text-xs text-warn">{error}</p> : null}
+        {actionError ? (
+          <p className="px-3 text-xs text-warn">{actionError}</p>
+        ) : null}
+        {local.length > 0 ? (
+          <BranchGroup
+            title="Local"
+            branches={local}
+            folded={folded.Local === true}
+            onToggle={() =>
+              setFolded((current) => ({ ...current, Local: !current.Local }))
+            }
+            onOpen={openMenu}
+          />
+        ) : null}
         {remoteNames.map((remote) => (
           <BranchGroup
             key={remote}
             title={remote}
-            branches={branches.filter((branch) => branch.remote === remote)}
-            onOpen={(branch, event) => {
-              setMenu({
-                x: event.clientX,
-                y: event.clientY,
-                items: branchItems(branch),
-              });
-            }}
+            branches={visible.filter((branch) => branch.remote === remote)}
+            folded={folded[remote] === true}
+            onToggle={() =>
+              setFolded((current) => ({
+                ...current,
+                [remote]: !current[remote],
+              }))
+            }
+            onOpen={openMenu}
           />
         ))}
-        {remoteNames.length === 0 ? (
-          <BranchGroup title="Remotes" branches={[]} />
+        {!loading && visible.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-muted">
+            {branches.length === 0 ? "Sin ramas" : "Ninguna rama coincide"}
+          </p>
         ) : null}
       </div>
       {menu ? (
@@ -175,81 +233,60 @@ export function BranchPanel({
   }
 }
 
+function shortName(branch: BranchRef): string {
+  if (!branch.remote) {
+    return branch.name;
+  }
+  const prefix = `${branch.remote}/`;
+  return branch.name.startsWith(prefix)
+    ? branch.name.slice(prefix.length)
+    : branch.name;
+}
+
 function BranchGroup({
   title,
   branches,
-  busy = false,
-  draft,
-  onDraft,
-  onCreate,
+  folded,
+  onToggle,
   onOpen,
 }: {
   title: string;
   branches: BranchRef[];
-  busy?: boolean;
-  draft?: string;
-  onDraft?: (value: string) => void;
-  onCreate?: () => void;
-  onOpen?: (branch: BranchRef, event: MouseEvent) => void;
+  folded: boolean;
+  onToggle: () => void;
+  onOpen: (branch: BranchRef, event: MouseEvent) => void;
 }) {
   return (
-    <section className="mb-3">
-      <h2 className="px-2 py-1 text-[11px] font-semibold tracking-wide text-muted uppercase">
-        {title}
-      </h2>
-      {onCreate ? (
-        <form
-          className="mb-2 flex gap-1 px-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onCreate();
-          }}
-        >
-          <input
-            value={draft ?? ""}
-            disabled={busy}
-            placeholder="Nueva rama"
-            onChange={(event) => onDraft?.(event.target.value)}
-            className="min-w-0 flex-1 rounded border border-line bg-surface px-2 py-1 text-xs"
-          />
-          <button
-            type="submit"
-            disabled={busy || (draft ?? "").trim().length === 0}
-            className="rounded px-2 py-1 text-xs text-accent disabled:text-muted"
-          >
-            Crear
-          </button>
-        </form>
-      ) : null}
-      {branches.length === 0 ? (
-        <p className="px-2 text-xs text-muted">Sin ramas</p>
-      ) : (
+    <section>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 px-3 py-1 text-left text-[11px] text-muted hover:text-text"
+      >
+        <span className="w-2">{folded ? "▸" : "▾"}</span>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span>{branches.length}</span>
+      </button>
+      {folded ? null : (
         <ul>
           {branches.map((branch) => (
             <li key={`${branch.remote ?? "local"}:${branch.name}`}>
               <button
                 type="button"
-                disabled={!onOpen}
-                onClick={(event) => onOpen?.(branch, event)}
-                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm disabled:opacity-60 ${
-                  branch.isHead ? "bg-accent-dim text-accent" : "text-text"
+                onClick={(event) => onOpen(branch, event)}
+                className={`flex h-7 w-full items-center gap-2 px-3 text-left text-xs ${
+                  branch.isHead
+                    ? "bg-accent-dim text-accent"
+                    : "text-text hover:bg-surface-overlay"
                 }`}
               >
-                <BranchMark head={branch.isHead} />
-                <span className="truncate">{branch.name}</span>
+                <GitBranch size={13} className="shrink-0" />
+                <span className="truncate">{shortName(branch)}</span>
               </button>
             </li>
           ))}
         </ul>
       )}
     </section>
-  );
-}
-
-function BranchMark({ head }: { head: boolean }) {
-  return (
-    <span
-      className={`size-1.5 shrink-0 rounded-full ${head ? "bg-accent" : "bg-graph-edge"}`}
-    />
   );
 }

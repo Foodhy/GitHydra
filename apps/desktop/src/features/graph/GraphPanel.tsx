@@ -35,10 +35,11 @@ export function CommitGraph({
           const x2 = center(link.toColumn);
           const y2 = centerY(link.toRow);
           const color = LANE_COLORS[node.column % LANE_COLORS.length];
+          const bend = GRAPH_ROW_HEIGHT / 2;
           const path =
             x1 === x2
               ? `M ${x1} ${y1} L ${x2} ${y2}`
-              : `M ${x1} ${y1} C ${x1} ${y1 + 24}, ${x2} ${y2 - 24}, ${x2} ${y2}`;
+              : `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`;
           return (
             <path
               key={`${node.sha}-${link.toRow}-${link.toColumn}`}

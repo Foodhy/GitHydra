@@ -51,8 +51,8 @@ export function WorkspaceShell({ path }: { path: string }) {
       <div className="min-h-0 flex-1">
         <PanelGroup autoSaveId="githydra-rows" direction="vertical">
           <Panel defaultSize={78} minSize={40}>
-            <PanelGroup autoSaveId="githydra-cols-v2" direction="horizontal">
-              <Panel defaultSize={16} minSize={12} className="min-w-0">
+            <PanelGroup autoSaveId="githydra-cols-v3" direction="horizontal">
+              <Panel defaultSize={18} minSize={12} className="min-w-0">
                 <BranchPanel
                   path={path}
                   revision={revision}
@@ -60,7 +60,7 @@ export function WorkspaceShell({ path }: { path: string }) {
                 />
               </Panel>
               <PanelResizeHandle className="w-px bg-line" />
-              <Panel defaultSize={48} minSize={28} className="min-w-0">
+              <Panel defaultSize={42} minSize={28} className="min-w-0">
                 <section className="flex h-full min-w-0 flex-col">
                   <div className="flex gap-1 border-b border-line px-2 py-1">
                     <TabButton
@@ -105,7 +105,7 @@ export function WorkspaceShell({ path }: { path: string }) {
                 </section>
               </Panel>
               <PanelResizeHandle className="w-px bg-line" />
-              <Panel defaultSize={28} minSize={18} className="min-w-0">
+              <Panel defaultSize={40} minSize={18} className="min-w-0">
                 {selectedSha ? (
                   <CommitDiffPanel
                     path={path}

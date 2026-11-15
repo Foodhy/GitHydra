@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.9.0`.
+No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.10.0`.
 
 ## Hecho — fase 0
 
@@ -76,6 +76,10 @@ Ya está en el primer commit:
 ### 15. Menú de rama y commit — hecho en 0.9.0
 
 - [x] Clic en una rama, un commit o un punto del grafo abre lo que ya se puede hacer: checkout, pull, push, borrar, copiar, ver el cambio y crear una rama en ese punto. Las filas del historial son más bajas.
+
+### 16. Lista densa — hecho en 0.10.0
+
+- [x] Las ramas se filtran y se pliegan, y la actual queda arriba. El historial es una fila por commit, alineada con el grafo.
 
 ### Más adelante, en ese mismo menú
 
