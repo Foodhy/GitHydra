@@ -361,6 +361,23 @@ pub fn checkout_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
 
 pub fn create_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
     let repo = discover(repo_path)?;
+    let commit = head_commit(&repo)?
+        .ok_or_else(|| GitError::Io("No hay commits para crear la rama".into()))?;
+    create_named_branch(&repo, name, &commit)
+}
+
+pub fn create_branch_at(repo_path: &str, name: &str, sha: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
+    let commit = repo.find_commit(oid).map_err(map_git)?;
+    create_named_branch(&repo, name, &commit)
+}
+
+fn create_named_branch(
+    repo: &Repository,
+    name: &str,
+    commit: &git2::Commit<'_>,
+) -> Result<(), GitError> {
     let branch_name = name.trim();
     let refname = format!("refs/heads/{branch_name}");
     if branch_name.is_empty() || !git2::Reference::is_valid_name(&refname) {
@@ -368,9 +385,7 @@ pub fn create_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
             "Nombre de rama inválido: {branch_name}"
         )));
     }
-    let commit = head_commit(&repo)?
-        .ok_or_else(|| GitError::Io("No hay commits para crear la rama".into()))?;
-    repo.branch(branch_name, &commit, false).map_err(map_git)?;
+    repo.branch(branch_name, commit, false).map_err(map_git)?;
     Ok(())
 }
 
@@ -1226,5 +1241,10 @@ mod tests {
         let added = working_tree_diff(path, "notes.txt", false).expect("new file");
         assert!(added.before.contains("no tiene el archivo"));
         assert!(added.after.contains("pendiente"));
+
+        let sha = open_repository(path).expect("open").head_sha.expect("sha");
+        create_branch_at(path, "from-sha", &sha).expect("branch at sha");
+        let branches = list_branches(path).expect("branches");
+        assert!(branches.iter().any(|branch| branch.name == "from-sha"));
     }
 }

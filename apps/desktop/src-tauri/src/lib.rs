@@ -65,6 +65,11 @@ fn create_branch(path: String, name: String) -> Result<(), git::GitError> {
 }
 
 #[tauri::command]
+fn create_branch_at(path: String, name: String, sha: String) -> Result<(), git::GitError> {
+    git::create_branch_at(&path, &name, &sha)
+}
+
+#[tauri::command]
 fn delete_branch(path: String, name: String) -> Result<(), git::GitError> {
     git::delete_branch(&path, &name)
 }
@@ -132,6 +137,7 @@ pub fn run() {
             create_commit,
             checkout_branch,
             create_branch,
+            create_branch_at,
             delete_branch,
             fetch,
             pull,

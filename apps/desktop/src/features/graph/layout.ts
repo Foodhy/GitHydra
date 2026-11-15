@@ -1,4 +1,4 @@
-export const GRAPH_ROW_HEIGHT = 56;
+export const GRAPH_ROW_HEIGHT = 44;
 export const GRAPH_COLUMN_WIDTH = 16;
 export const GRAPH_PAD = 12;
 

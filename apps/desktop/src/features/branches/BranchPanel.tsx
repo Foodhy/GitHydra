@@ -1,5 +1,6 @@
 import type { BranchRef } from "@githydra/contracts";
-import { useState } from "react";
+import { type MouseEvent, useState } from "react";
+import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useBranches } from "../../hooks/useBranches";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
@@ -17,6 +18,11 @@ export function BranchPanel({
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    items: MenuItem[];
+  } | null>(null);
   const local = branches.filter((branch) => branch.remote === null);
   const remoteNames = [
     ...new Set(
@@ -69,14 +75,12 @@ export function BranchPanel({
               setName("");
             });
           }}
-          onCheckout={(branch) => {
-            void run(() => tauriGit.checkoutBranch(path, branch.name));
-          }}
-          onDelete={(branch) => {
-            if (!window.confirm(`¿Borrar la rama ${branch.name}?`)) {
-              return;
-            }
-            void run(() => tauriGit.deleteBranch(path, branch.name));
+          onOpen={(branch, event) => {
+            setMenu({
+              x: event.clientX,
+              y: event.clientY,
+              items: branchItems(branch),
+            });
           }}
         />
         {remoteNames.map((remote) => (
@@ -84,14 +88,91 @@ export function BranchPanel({
             key={remote}
             title={remote}
             branches={branches.filter((branch) => branch.remote === remote)}
+            onOpen={(branch, event) => {
+              setMenu({
+                x: event.clientX,
+                y: event.clientY,
+                items: branchItems(branch),
+              });
+            }}
           />
         ))}
         {remoteNames.length === 0 ? (
           <BranchGroup title="Remotes" branches={[]} />
         ) : null}
       </div>
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menu.items}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </aside>
   );
+
+  function branchItems(branch: BranchRef): MenuItem[] {
+    const local = branch.remote === null;
+    return [
+      {
+        id: "checkout",
+        label: "Checkout",
+        disabled: !local || branch.isHead || busy,
+        onSelect: () => {
+          void run(() => tauriGit.checkoutBranch(path, branch.name));
+        },
+      },
+      {
+        id: "pull",
+        label: "Pull",
+        disabled: !branch.isHead || busy,
+        onSelect: () => {
+          void run(() => tauriGit.pull(path));
+        },
+      },
+      {
+        id: "push",
+        label: "Push",
+        disabled: !branch.isHead || busy,
+        onSelect: () => {
+          void run(() => tauriGit.push(path));
+        },
+      },
+      {
+        id: "create",
+        label: "Crear rama aquí",
+        disabled: !branch.tipSha || busy,
+        onSelect: () => {
+          const nextName = window.prompt("Nombre de la nueva rama");
+          const tip = branch.tipSha;
+          if (!nextName || !tip) {
+            return;
+          }
+          void run(() => tauriGit.createBranchAt(path, nextName, tip));
+        },
+      },
+      {
+        id: "copy",
+        label: "Copiar nombre",
+        onSelect: () => {
+          void navigator.clipboard.writeText(branch.name);
+        },
+      },
+      {
+        id: "delete",
+        label: "Borrar",
+        danger: true,
+        disabled: !local || branch.isHead || busy,
+        onSelect: () => {
+          if (!window.confirm(`¿Borrar la rama ${branch.name}?`)) {
+            return;
+          }
+          void run(() => tauriGit.deleteBranch(path, branch.name));
+        },
+      },
+    ];
+  }
 }
 
 function BranchGroup({
@@ -101,8 +182,7 @@ function BranchGroup({
   draft,
   onDraft,
   onCreate,
-  onCheckout,
-  onDelete,
+  onOpen,
 }: {
   title: string;
   branches: BranchRef[];
@@ -110,8 +190,7 @@ function BranchGroup({
   draft?: string;
   onDraft?: (value: string) => void;
   onCreate?: () => void;
-  onCheckout?: (branch: BranchRef) => void;
-  onDelete?: (branch: BranchRef) => void;
+  onOpen?: (branch: BranchRef, event: MouseEvent) => void;
 }) {
   return (
     <section className="mb-3">
@@ -147,42 +226,18 @@ function BranchGroup({
       ) : (
         <ul>
           {branches.map((branch) => (
-            <li
-              key={`${branch.remote ?? "local"}:${branch.name}`}
-              className="flex items-center gap-1"
-            >
-              {onCheckout ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onCheckout(branch)}
-                  className={`flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left text-sm disabled:opacity-60 ${
-                    branch.isHead ? "bg-accent-dim text-accent" : "text-text"
-                  }`}
-                >
-                  <BranchMark head={branch.isHead} />
-                  <span className="truncate">{branch.name}</span>
-                </button>
-              ) : (
-                <div
-                  className={`flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-sm ${
-                    branch.isHead ? "bg-accent-dim text-accent" : "text-text"
-                  }`}
-                >
-                  <BranchMark head={branch.isHead} />
-                  <span className="truncate">{branch.name}</span>
-                </div>
-              )}
-              {onDelete && !branch.isHead ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onDelete(branch)}
-                  className="px-1 text-[11px] text-muted hover:text-warn disabled:opacity-60"
-                >
-                  Borrar
-                </button>
-              ) : null}
+            <li key={`${branch.remote ?? "local"}:${branch.name}`}>
+              <button
+                type="button"
+                disabled={!onOpen}
+                onClick={(event) => onOpen?.(branch, event)}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm disabled:opacity-60 ${
+                  branch.isHead ? "bg-accent-dim text-accent" : "text-text"
+                }`}
+              >
+                <BranchMark head={branch.isHead} />
+                <span className="truncate">{branch.name}</span>
+              </button>
             </li>
           ))}
         </ul>

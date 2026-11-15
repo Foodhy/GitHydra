@@ -43,6 +43,9 @@ export const tauriGit: GitPort = {
   createBranch(path, name) {
     return invoke<void>("create_branch", { path, name });
   },
+  createBranchAt(path, name, sha) {
+    return invoke<void>("create_branch_at", { path, name, sha });
+  },
   deleteBranch(path, name) {
     return invoke<void>("delete_branch", { path, name });
   },
