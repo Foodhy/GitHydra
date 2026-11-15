@@ -401,6 +401,73 @@ pub fn delete_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
     branch.delete().map_err(map_git)
 }
 
+pub fn rename_branch(repo_path: &str, name: &str, next_name: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let current = name.trim();
+    let next = next_name.trim();
+    let refname = format!("refs/heads/{next}");
+    if next.is_empty() || !git2::Reference::is_valid_name(&refname) {
+        return Err(GitError::Io(format!("Nombre de rama inválido: {next}")));
+    }
+    if repo.find_branch(next, BranchType::Local).is_ok() {
+        return Err(GitError::Io(format!("Ya existe la rama {next}")));
+    }
+    let mut branch = repo
+        .find_branch(current, BranchType::Local)
+        .map_err(|_| GitError::Io(format!("No existe la rama local: {current}")))?;
+    branch.rename(next, false).map_err(map_git)?;
+    Ok(())
+}
+
+pub fn set_upstream(repo_path: &str, name: &str, upstream: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let branch_name = name.trim();
+    let upstream_name = upstream.trim();
+    if !upstream_name.contains('/') {
+        return Err(GitError::Io(
+            "El upstream se escribe como origen/rama".into(),
+        ));
+    }
+    let mut branch = repo
+        .find_branch(branch_name, BranchType::Local)
+        .map_err(|_| GitError::Io(format!("No existe la rama local: {branch_name}")))?;
+    branch.set_upstream(Some(upstream_name)).map_err(map_git)?;
+    Ok(())
+}
+
+pub fn create_tag(repo_path: &str, sha: &str, name: &str, message: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let tag_name = name.trim();
+    let refname = format!("refs/tags/{tag_name}");
+    if tag_name.is_empty() || !git2::Reference::is_valid_name(&refname) {
+        return Err(GitError::Io(format!("Nombre de tag inválido: {tag_name}")));
+    }
+    let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
+    let commit = repo.find_commit(oid).map_err(map_git)?;
+    let note = message.trim();
+    if note.is_empty() {
+        repo.tag_lightweight(tag_name, commit.as_object(), false)
+            .map_err(map_git)?;
+    } else {
+        let signature = repo.signature().map_err(|_| {
+            GitError::Io("Falta user.name o user.email en la configuración de git".into())
+        })?;
+        repo.tag(tag_name, commit.as_object(), &signature, note, false)
+            .map_err(map_git)?;
+    }
+    Ok(())
+}
+
+pub fn checkout_commit(repo_path: &str, sha: &str) -> Result<(), GitError> {
+    let repo = discover(repo_path)?;
+    let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
+    let commit = repo.find_commit(oid).map_err(map_git)?;
+    repo.checkout_tree(commit.as_object(), None)
+        .map_err(map_git)?;
+    repo.set_head_detached(oid).map_err(map_git)?;
+    Ok(())
+}
+
 const FILE_BYTE_LIMIT: usize = 1024 * 1024;
 
 pub fn fetch(repo_path: &str) -> Result<(), GitError> {
@@ -704,7 +771,10 @@ pub fn working_tree_diff(repo_path: &str, file: &str, staged: bool) -> Result<Wo
         repo.diff_tree_to_index(tree.as_ref(), Some(&index), Some(&mut options))
             .map_err(map_git)?
     } else {
-        options.include_untracked(true).show_untracked_content(true);
+        options
+            .include_untracked(true)
+            .show_untracked_content(true)
+            .recurse_untracked_dirs(true);
         repo.diff_index_to_workdir(None, Some(&mut options))
             .map_err(map_git)?
     };
@@ -1241,10 +1311,86 @@ mod tests {
         let added = working_tree_diff(path, "notes.txt", false).expect("new file");
         assert!(added.before.contains("no tiene el archivo"));
         assert!(added.after.contains("pendiente"));
+        assert!(added.patch.contains("+pendiente"));
+
+        fs::create_dir_all(dir.0.join("nested")).expect("dir");
+        fs::write(dir.0.join("nested/new.txt"), "hola\n").expect("nested");
+        let nested = working_tree_diff(path, "nested/new.txt", false).expect("nested diff");
+        assert!(nested.patch.contains("+hola"));
 
         let sha = open_repository(path).expect("open").head_sha.expect("sha");
         create_branch_at(path, "from-sha", &sha).expect("branch at sha");
         let branches = list_branches(path).expect("branches");
         assert!(branches.iter().any(|branch| branch.name == "from-sha"));
+    }
+
+    #[test]
+    fn renames_sets_upstream_tags_and_checks_out_a_commit() {
+        let dir = scratch_dir();
+        let origin = dir.0.join("origin.git");
+        GitRepository::init_bare(&origin).expect("bare");
+        let source_path = dir.0.join("source");
+        let source = GitRepository::init(&source_path).expect("source");
+        let mut config = source.config().expect("config");
+        config.set_str("user.name", "Hydra").expect("name");
+        config
+            .set_str("user.email", "hydra@example.com")
+            .expect("email");
+        fs::write(source_path.join("README.md"), "uno\n").expect("write");
+        commit_all(&source, "first");
+
+        let path = source_path.to_str().unwrap();
+        let info = open_repository(path).expect("open");
+        let branch = info.current_branch.expect("branch");
+        let sha = info.head_sha.expect("sha");
+
+        create_branch(path, "side").expect("side");
+        rename_branch(path, "side", "side-renamed").expect("rename");
+        let names: Vec<String> = list_branches(path)
+            .expect("branches")
+            .into_iter()
+            .map(|item| item.name)
+            .collect();
+        assert!(names.iter().any(|name| name == "side-renamed"));
+        assert!(!names.iter().any(|name| name == "side"));
+
+        rename_branch(path, &branch, "trunk").expect("rename head");
+        let renamed = open_repository(path).expect("renamed");
+        assert_eq!(renamed.current_branch.as_deref(), Some("trunk"));
+        assert!(!renamed.is_detached);
+        assert_eq!(renamed.head_sha.as_deref(), Some(sha.as_str()));
+
+        source
+            .remote("origin", origin.to_str().unwrap())
+            .expect("remote");
+        let mut remote = source.find_remote("origin").expect("find remote");
+        remote
+            .push(&["refs/heads/trunk:refs/heads/trunk"], None)
+            .expect("push");
+        set_upstream(path, "trunk", "origin/trunk").expect("upstream");
+        let tracked = source
+            .find_branch("trunk", BranchType::Local)
+            .expect("trunk");
+        let upstream = tracked.upstream().expect("has upstream");
+        assert_eq!(
+            upstream.name().expect("name").expect("text"),
+            "origin/trunk"
+        );
+
+        create_tag(path, &sha, "v1", "").expect("light");
+        create_tag(path, &sha, "v2", "anotado").expect("annotated");
+        assert!(source.find_reference("refs/tags/v1").is_ok());
+        let annotated = source.find_reference("refs/tags/v2").expect("v2");
+        let tag = annotated.peel_to_tag().expect("tag object");
+        assert!(tag.message().unwrap_or("").contains("anotado"));
+        assert_eq!(
+            open_repository(path).expect("still").head_sha.as_deref(),
+            Some(sha.as_str())
+        );
+
+        checkout_commit(path, &sha).expect("detach");
+        let detached = open_repository(path).expect("detached");
+        assert!(detached.is_detached);
+        assert_eq!(detached.head_sha.as_deref(), Some(sha.as_str()));
     }
 }

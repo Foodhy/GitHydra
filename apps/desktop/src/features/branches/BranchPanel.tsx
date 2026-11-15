@@ -1,5 +1,5 @@
 import type { BranchRef } from "@githydra/contracts";
-import { GitBranch, Plus } from "lucide-react";
+import { Folder, GitBranch, Plus } from "lucide-react";
 import { type MouseEvent, useState } from "react";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useBranches } from "../../hooks/useBranches";
@@ -58,6 +58,17 @@ export function BranchPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  function toggleFolder(key: string) {
+    setFolded((current) => ({ ...current, [key]: !current[key] }));
+  }
+
+  function folderOpen(key: string) {
+    if (needle.length > 0) {
+      return true;
+    }
+    return folded[key] === true;
   }
 
   function openMenu(branch: BranchRef, event: MouseEvent) {
@@ -132,9 +143,11 @@ export function BranchPanel({
             title="Local"
             branches={local}
             folded={folded.Local === true}
+            folderOpen={folderOpen}
             onToggle={() =>
               setFolded((current) => ({ ...current, Local: !current.Local }))
             }
+            onToggleFolder={(folder) => toggleFolder(`Local/${folder}`)}
             onOpen={openMenu}
           />
         ) : null}
@@ -144,12 +157,14 @@ export function BranchPanel({
             title={remote}
             branches={visible.filter((branch) => branch.remote === remote)}
             folded={folded[remote] === true}
+            folderOpen={folderOpen}
             onToggle={() =>
               setFolded((current) => ({
                 ...current,
                 [remote]: !current[remote],
               }))
             }
+            onToggleFolder={(folder) => toggleFolder(`${remote}/${folder}`)}
             onOpen={openMenu}
           />
         ))}
@@ -211,6 +226,30 @@ export function BranchPanel({
         },
       },
       {
+        id: "rename",
+        label: "Renombrar",
+        disabled: !local || busy,
+        onSelect: () => {
+          const nextName = window.prompt("Nuevo nombre", shortName(branch));
+          if (!nextName || nextName.trim() === branch.name) {
+            return;
+          }
+          void run(() => tauriGit.renameBranch(path, branch.name, nextName));
+        },
+      },
+      {
+        id: "upstream",
+        label: "Upstream",
+        disabled: !local || busy,
+        onSelect: () => {
+          const upstream = window.prompt("Upstream (origen/rama)", "origin/");
+          if (!upstream) {
+            return;
+          }
+          void run(() => tauriGit.setUpstream(path, branch.name, upstream));
+        },
+      },
+      {
         id: "copy",
         label: "Copiar nombre",
         onSelect: () => {
@@ -247,15 +286,20 @@ function BranchGroup({
   title,
   branches,
   folded,
+  folderOpen,
   onToggle,
+  onToggleFolder,
   onOpen,
 }: {
   title: string;
   branches: BranchRef[];
   folded: boolean;
+  folderOpen: (key: string) => boolean;
   onToggle: () => void;
+  onToggleFolder: (folder: string) => void;
   onOpen: (branch: BranchRef, event: MouseEvent) => void;
 }) {
+  const tree = organize(branches);
   return (
     <section>
       <button
@@ -269,24 +313,130 @@ function BranchGroup({
       </button>
       {folded ? null : (
         <ul>
-          {branches.map((branch) => (
-            <li key={`${branch.remote ?? "local"}:${branch.name}`}>
-              <button
-                type="button"
-                onClick={(event) => onOpen(branch, event)}
-                className={`flex h-7 w-full items-center gap-2 px-3 text-left text-xs ${
-                  branch.isHead
-                    ? "bg-accent-dim text-accent"
-                    : "text-text hover:bg-surface-overlay"
-                }`}
-              >
-                <GitBranch size={13} className="shrink-0" />
-                <span className="truncate">{shortName(branch)}</span>
-              </button>
-            </li>
+          {tree.pinned ? (
+            <BranchRow
+              branch={tree.pinned}
+              label={shortName(tree.pinned)}
+              onOpen={onOpen}
+            />
+          ) : null}
+          {tree.loose.map((branch) => (
+            <BranchRow
+              key={`${branch.remote ?? "local"}:${branch.name}`}
+              branch={branch}
+              label={shortName(branch)}
+              onOpen={onOpen}
+            />
           ))}
+          {tree.folders.map((folder) => {
+            const open = folderOpen(`${title}/${folder.name}`);
+            return (
+              <li key={folder.name}>
+                <button
+                  type="button"
+                  onClick={() => onToggleFolder(folder.name)}
+                  className="flex h-7 w-full items-center gap-2 px-3 text-left text-xs text-muted hover:bg-surface-overlay hover:text-text"
+                >
+                  <span className="w-2 text-[10px]">{open ? "▾" : "▸"}</span>
+                  <Folder size={13} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                  <span className="text-[11px]">{folder.branches.length}</span>
+                </button>
+                {open ? (
+                  <ul>
+                    {folder.branches.map((branch) => (
+                      <BranchRow
+                        key={`${branch.remote ?? "local"}:${branch.name}`}
+                        branch={branch}
+                        label={labelInFolder(branch, folder.name)}
+                        indent
+                        onOpen={onOpen}
+                      />
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
   );
+}
+
+function BranchRow({
+  branch,
+  label,
+  indent = false,
+  onOpen,
+}: {
+  branch: BranchRef;
+  label: string;
+  indent?: boolean;
+  onOpen: (branch: BranchRef, event: MouseEvent) => void;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={(event) => onOpen(branch, event)}
+        className={`flex h-7 w-full items-center gap-2 text-left text-xs ${
+          indent ? "pr-3 pl-8" : "px-3"
+        } ${
+          branch.isHead
+            ? "bg-accent-dim text-accent"
+            : "text-text hover:bg-surface-overlay"
+        }`}
+      >
+        <GitBranch size={13} className="shrink-0" />
+        <span className="truncate">{label}</span>
+      </button>
+    </li>
+  );
+}
+
+function organize(branches: BranchRef[]): {
+  pinned: BranchRef | null;
+  loose: BranchRef[];
+  folders: { name: string; branches: BranchRef[] }[];
+} {
+  const pinned = branches.find((branch) => branch.isHead) ?? null;
+  const rest = pinned
+    ? branches.filter((branch) => branch !== pinned)
+    : branches;
+  const buckets = new Map<string, BranchRef[]>();
+  const loose: BranchRef[] = [];
+  for (const branch of rest) {
+    const slash = shortName(branch).indexOf("/");
+    if (slash <= 0) {
+      loose.push(branch);
+      continue;
+    }
+    const folder = shortName(branch).slice(0, slash);
+    const items = buckets.get(folder) ?? [];
+    items.push(branch);
+    buckets.set(folder, items);
+  }
+  const folders: { name: string; branches: BranchRef[] }[] = [];
+  for (const [name, items] of buckets) {
+    if (items.length < 2) {
+      loose.push(...items);
+      continue;
+    }
+    folders.push({
+      name,
+      branches: items.sort((left, right) =>
+        shortName(left).localeCompare(shortName(right)),
+      ),
+    });
+  }
+  loose.sort((left, right) => shortName(left).localeCompare(shortName(right)));
+  folders.sort((left, right) => left.name.localeCompare(right.name));
+  return { pinned, loose, folders };
+}
+
+function labelInFolder(branch: BranchRef, folder: string): string {
+  const name = shortName(branch);
+  const prefix = `${folder}/`;
+  return name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }

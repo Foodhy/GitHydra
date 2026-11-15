@@ -122,6 +122,46 @@ export function HistoryPanel({
         },
       },
       {
+        id: "checkout",
+        label: "Checkout de este commit",
+        onSelect: () => {
+          if (
+            !window.confirm("HEAD queda suelto en este commit. ¿Continuar?")
+          ) {
+            return;
+          }
+          void tauriGit
+            .checkoutCommit(path, commit.sha)
+            .then(() => onRepositoryChanged())
+            .catch((reason: unknown) => {
+              setActionError(toGitClientError(reason).message);
+            });
+        },
+      },
+      {
+        id: "tag",
+        label: "Crear tag",
+        onSelect: () => {
+          const tagName = window.prompt("Nombre del tag");
+          if (!tagName) {
+            return;
+          }
+          const message = window.prompt(
+            "Mensaje del tag. Vacío crea un tag ligero.",
+            "",
+          );
+          if (message === null) {
+            return;
+          }
+          void tauriGit
+            .createTag(path, commit.sha, tagName, message)
+            .then(() => onRepositoryChanged())
+            .catch((reason: unknown) => {
+              setActionError(toGitClientError(reason).message);
+            });
+        },
+      },
+      {
         id: "branch",
         label: "Crear rama aquí",
         onSelect: () => {

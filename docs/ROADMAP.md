@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.10.0`.
+No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.11.0`.
 
 ## Hecho — fase 0
 
@@ -81,19 +81,24 @@ Ya está en el primer commit:
 
 - [x] Las ramas se filtran y se pliegan, y la actual queda arriba. El historial es una fila por commit, alineada con el grafo.
 
+### 17. Formato y acciones — hecho en 0.11.0
+
+- [x] El diff muestra números de línea y el árbol agrupa los archivos. Se puede renombrar una rama, guardar su upstream, crear un tag y hacer checkout de un commit.
+
 ### Más adelante, en ese mismo menú
 
-- [ ] Upstream
+- [x] Upstream
 - [ ] Fast-forward de una rama sobre otra
 - [ ] Merge
 - [ ] Rebase
-- [ ] Checkout de un commit, con `HEAD` suelto
+- [x] Checkout de un commit, con `HEAD` suelto
 - [ ] Worktree
 - [ ] Cherry-pick
 - [ ] Reset de la rama a un commit
 - [ ] Revert
-- [ ] Renombrar rama
-- [ ] Enlace al remoto, parche y tag
+- [x] Renombrar rama
+- [ ] Enlace al remoto y parche
+- [x] Tag
 
 ## StealThis
 

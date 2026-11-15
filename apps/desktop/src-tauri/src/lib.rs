@@ -75,6 +75,31 @@ fn delete_branch(path: String, name: String) -> Result<(), git::GitError> {
 }
 
 #[tauri::command]
+fn rename_branch(path: String, name: String, next_name: String) -> Result<(), git::GitError> {
+    git::rename_branch(&path, &name, &next_name)
+}
+
+#[tauri::command]
+fn set_upstream(path: String, name: String, upstream: String) -> Result<(), git::GitError> {
+    git::set_upstream(&path, &name, &upstream)
+}
+
+#[tauri::command]
+fn create_tag(
+    path: String,
+    sha: String,
+    name: String,
+    message: String,
+) -> Result<(), git::GitError> {
+    git::create_tag(&path, &sha, &name, &message)
+}
+
+#[tauri::command]
+fn checkout_commit(path: String, sha: String) -> Result<(), git::GitError> {
+    git::checkout_commit(&path, &sha)
+}
+
+#[tauri::command]
 fn fetch(path: String) -> Result<(), git::GitError> {
     git::fetch(&path)
 }
@@ -139,6 +164,10 @@ pub fn run() {
             create_branch,
             create_branch_at,
             delete_branch,
+            rename_branch,
+            set_upstream,
+            create_tag,
+            checkout_commit,
             fetch,
             pull,
             push,

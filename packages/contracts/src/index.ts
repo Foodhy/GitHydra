@@ -106,6 +106,15 @@ export interface GitPort {
   createBranch(path: string, name: string): Promise<void>;
   createBranchAt(path: string, name: string, sha: string): Promise<void>;
   deleteBranch(path: string, name: string): Promise<void>;
+  renameBranch(path: string, name: string, nextName: string): Promise<void>;
+  setUpstream(path: string, name: string, upstream: string): Promise<void>;
+  createTag(
+    path: string,
+    sha: string,
+    name: string,
+    message: string,
+  ): Promise<void>;
+  checkoutCommit(path: string, sha: string): Promise<void>;
   fetch(path: string): Promise<void>;
   pull(path: string): Promise<void>;
   push(path: string): Promise<void>;

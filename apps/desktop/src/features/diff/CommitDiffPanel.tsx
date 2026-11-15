@@ -2,6 +2,7 @@ import type { CommitDiff, CommitDiffFile } from "@githydra/contracts";
 import { useEffect, useState } from "react";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { PatchView } from "./PatchView";
 
 export function CommitDiffPanel({
   path,
@@ -95,39 +96,13 @@ export function CommitDiffPanel({
               El parche supera el límite y está truncado.
             </p>
           ) : null}
-          <div className="min-h-0 flex-1 overflow-auto p-3">
-            {file ? <PatchView file={file} /> : null}
+          <div className="min-h-0 flex-1 overflow-auto">
+            {file ? <PatchView patch={file.patch} mode="unido" /> : null}
           </div>
         </>
       ) : null}
     </aside>
   );
-}
-
-function PatchView({ file }: { file: CommitDiffFile }) {
-  return (
-    <pre className="font-mono text-[11px] leading-5 whitespace-pre-wrap">
-      {file.patch.split("\n").map((line, index) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: las líneas repetidas de un parche se distinguen por su posición
-        <div key={index} className={lineColor(line)}>
-          {line.length === 0 ? " " : line}
-        </div>
-      ))}
-    </pre>
-  );
-}
-
-function lineColor(line: string): string {
-  if (line.startsWith("+") && !line.startsWith("+++")) {
-    return "text-accent";
-  }
-  if (line.startsWith("-") && !line.startsWith("---")) {
-    return "text-warn";
-  }
-  if (line.startsWith("@@")) {
-    return "text-graph-edge";
-  }
-  return "text-muted";
 }
 
 function kindMark(kind: CommitDiffFile["kind"]): string {

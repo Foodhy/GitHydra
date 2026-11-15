@@ -23,8 +23,14 @@ export function StagingPanel({
   const [busy, setBusy] = useState(false);
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
-  const unstaged = entries.filter((entry) => !entry.staged);
-  const staged = entries.filter((entry) => entry.staged);
+  const [query, setQuery] = useState("");
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
+  const needle = query.trim().toLowerCase();
+  const visible = entries.filter((entry) =>
+    entry.path.toLowerCase().includes(needle),
+  );
+  const unstaged = visible.filter((entry) => !entry.staged);
+  const staged = visible.filter((entry) => entry.staged);
 
   async function move(filePaths: string[], fromStaged: boolean) {
     if (filePaths.length === 0 || busy) {
@@ -75,10 +81,18 @@ export function StagingPanel({
 
   return (
     <aside className="flex h-full flex-col bg-surface-raised">
-      <header className="border-b border-line px-3 py-2 text-xs text-muted">
-        {loading && entries.length === 0
-          ? "Leyendo cambios…"
-          : `${entries.length} cambio${entries.length === 1 ? "" : "s"} en el árbol`}
+      <header className="border-b border-line px-3 py-2">
+        <p className="text-xs text-muted">
+          {loading && entries.length === 0
+            ? "Leyendo cambios…"
+            : `${entries.length} cambio${entries.length === 1 ? "" : "s"} en el árbol`}
+        </p>
+        <input
+          value={query}
+          placeholder="Filtrar archivos"
+          onChange={(event) => setQuery(event.target.value)}
+          className="mt-1 w-full bg-transparent text-xs outline-none placeholder:text-muted"
+        />
       </header>
       <div className="min-h-0 flex-1 overflow-auto">
         {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
@@ -89,7 +103,15 @@ export function StagingPanel({
           title="Sin stage"
           entries={unstaged}
           busy={busy}
+          filtering={needle.length > 0}
+          openFolders={openFolders}
           selected={selected}
+          onToggleFolder={(folder) =>
+            setOpenFolders((current) => ({
+              ...current,
+              [`Sin stage/${folder}`]: !current[`Sin stage/${folder}`],
+            }))
+          }
           onSelect={onSelect}
           onMove={(filePaths) => {
             void move(filePaths, false);
@@ -99,7 +121,15 @@ export function StagingPanel({
           title="En stage"
           entries={staged}
           busy={busy}
+          filtering={needle.length > 0}
+          openFolders={openFolders}
           selected={selected}
+          onToggleFolder={(folder) =>
+            setOpenFolders((current) => ({
+              ...current,
+              [`En stage/${folder}`]: !current[`En stage/${folder}`],
+            }))
+          }
           onSelect={onSelect}
           onMove={(filePaths) => {
             void move(filePaths, true);
@@ -148,22 +178,30 @@ function FileGroup({
   title,
   entries,
   busy,
+  filtering,
+  openFolders,
   selected,
+  onToggleFolder,
   onSelect,
   onMove,
 }: {
   title: string;
   entries: WorkingTreeEntry[];
   busy: boolean;
+  filtering: boolean;
+  openFolders: Record<string, boolean>;
   selected: WorkFile | null;
+  onToggleFolder: (folder: string) => void;
   onSelect: (file: WorkFile) => void;
   onMove: (paths: string[]) => void;
 }) {
+  const tree = groupFiles(entries);
   return (
     <section className="border-b border-line">
       <div className="flex items-center justify-between px-3 py-2">
-        <h2 className="text-[11px] font-semibold tracking-wide text-muted uppercase">
+        <h2 className="text-xs text-muted">
           {title}
+          <span className="ml-2">{entries.length}</span>
         </h2>
         {entries.length > 0 ? (
           <button
@@ -180,36 +218,45 @@ function FileGroup({
         <p className="px-3 pb-2 text-xs text-muted">Vacío</p>
       ) : (
         <ul className="pb-2">
-          {entries.map((entry) => {
-            const active =
-              selected?.path === entry.path && selected.staged === entry.staged;
+          {tree.loose.map((entry) => (
+            <FileRow
+              key={`${entry.staged ? "s" : "u"}:${entry.path}:${entry.kind}`}
+              entry={entry}
+              label={entry.path}
+              busy={busy}
+              selected={selected}
+              onSelect={onSelect}
+              onMove={onMove}
+            />
+          ))}
+          {tree.folders.map((folder) => {
+            const open =
+              filtering || openFolders[`${title}/${folder.name}`] === true;
             return (
-              <li
-                key={`${entry.staged ? "s" : "u"}:${entry.path}:${entry.kind}`}
-                className="flex items-center"
-              >
+              <li key={folder.name}>
                 <button
                   type="button"
-                  onClick={() =>
-                    onSelect({ path: entry.path, staged: entry.staged })
-                  }
-                  className={`flex min-w-0 flex-1 items-center gap-2 px-3 py-0.5 text-left font-mono text-xs hover:bg-surface-overlay ${
-                    active ? "bg-surface-overlay" : ""
-                  }`}
+                  onClick={() => onToggleFolder(folder.name)}
+                  className="flex h-7 w-full items-center gap-2 px-3 text-left text-xs text-muted hover:bg-surface-overlay hover:text-text"
                 >
-                  <span className="w-4 text-warn">{kindMark(entry.kind)}</span>
-                  <span className="truncate" title={entry.path}>
-                    {entry.path}
-                  </span>
+                  <span className="w-2 text-[10px]">{open ? "▾" : "▸"}</span>
+                  <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                  <span>{folder.entries.length}</span>
                 </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onMove([entry.path])}
-                  className="px-2 text-[11px] text-accent disabled:text-muted"
-                >
-                  {entry.staged ? "Quitar" : "Stage"}
-                </button>
+                {open
+                  ? folder.entries.map((entry) => (
+                      <FileRow
+                        key={`${entry.staged ? "s" : "u"}:${entry.path}:${entry.kind}`}
+                        entry={entry}
+                        label={entry.path.slice(folder.name.length + 1)}
+                        busy={busy}
+                        indent
+                        selected={selected}
+                        onSelect={onSelect}
+                        onMove={onMove}
+                      />
+                    ))
+                  : null}
               </li>
             );
           })}
@@ -217,6 +264,95 @@ function FileGroup({
       )}
     </section>
   );
+}
+
+function FileRow({
+  entry,
+  label,
+  busy,
+  indent = false,
+  selected,
+  onSelect,
+  onMove,
+}: {
+  entry: WorkingTreeEntry;
+  label: string;
+  busy: boolean;
+  indent?: boolean;
+  selected: WorkFile | null;
+  onSelect: (file: WorkFile) => void;
+  onMove: (paths: string[]) => void;
+}) {
+  const active =
+    selected?.path === entry.path && selected.staged === entry.staged;
+  const slash = label.lastIndexOf("/");
+  const dir = slash >= 0 ? label.slice(0, slash + 1) : "";
+  const name = slash >= 0 ? label.slice(slash + 1) : label;
+  return (
+    <li className="flex items-center">
+      <button
+        type="button"
+        onClick={() => onSelect({ path: entry.path, staged: entry.staged })}
+        className={`flex h-7 min-w-0 flex-1 items-center gap-2 text-left font-mono text-xs hover:bg-surface-overlay ${
+          indent ? "pr-2 pl-8" : "px-3"
+        } ${active ? "bg-surface-overlay" : ""}`}
+      >
+        <span className={`w-4 shrink-0 ${kindColor(entry.kind)}`}>
+          {kindMark(entry.kind)}
+        </span>
+        <span className="truncate" title={entry.path}>
+          {dir ? <span className="text-muted">{dir}</span> : null}
+          {name}
+        </span>
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => onMove([entry.path])}
+        className="px-2 text-[11px] text-accent disabled:text-muted"
+      >
+        {entry.staged ? "Quitar" : "Stage"}
+      </button>
+    </li>
+  );
+}
+
+function groupFiles(entries: WorkingTreeEntry[]): {
+  loose: WorkingTreeEntry[];
+  folders: { name: string; entries: WorkingTreeEntry[] }[];
+} {
+  const buckets = new Map<string, WorkingTreeEntry[]>();
+  const loose: WorkingTreeEntry[] = [];
+  for (const entry of entries) {
+    const slash = entry.path.indexOf("/");
+    if (slash <= 0) {
+      loose.push(entry);
+      continue;
+    }
+    const folder = entry.path.slice(0, slash);
+    const items = buckets.get(folder) ?? [];
+    items.push(entry);
+    buckets.set(folder, items);
+  }
+  const folders = [...buckets.entries()]
+    .map(([name, items]) => ({ name, entries: items }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return { loose, folders };
+}
+
+function kindColor(kind: WorkingTreeEntry["kind"]): string {
+  switch (kind) {
+    case "added":
+      return "text-accent";
+    case "deleted":
+      return "text-warn";
+    case "modified":
+      return "text-graph-edge";
+    case "untracked":
+      return "text-muted";
+    default:
+      return "text-warn";
+  }
 }
 
 function kindMark(kind: WorkingTreeEntry["kind"]): string {

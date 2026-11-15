@@ -49,6 +49,18 @@ export const tauriGit: GitPort = {
   deleteBranch(path, name) {
     return invoke<void>("delete_branch", { path, name });
   },
+  renameBranch(path, name, nextName) {
+    return invoke<void>("rename_branch", { path, name, nextName });
+  },
+  setUpstream(path, name, upstream) {
+    return invoke<void>("set_upstream", { path, name, upstream });
+  },
+  createTag(path, sha, name, message) {
+    return invoke<void>("create_tag", { path, sha, name, message });
+  },
+  checkoutCommit(path, sha) {
+    return invoke<void>("checkout_commit", { path, sha });
+  },
   fetch(path) {
     return invoke<void>("fetch", { path });
   },
