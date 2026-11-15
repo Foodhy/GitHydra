@@ -10,6 +10,7 @@ import {
   VISUAL_STYLES,
   type VisualStyle,
 } from "../../lib/appearance";
+import { McpAccess } from "./McpAccess";
 
 export function SettingsPage() {
   const [styleId, setStyleId] = useState("hydra");
@@ -138,6 +139,7 @@ export function SettingsPage() {
             </p>
           ) : null}
         </section>
+        <McpAccess />
       </div>
     </main>
   );

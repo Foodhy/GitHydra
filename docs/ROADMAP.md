@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.12.0`.
+No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.13.0`.
 
 ## Hecho — fase 0
 
@@ -88,6 +88,10 @@ Ya está en el primer commit:
 ### 18. Sintaxis del diff — hecho en 0.12.0
 
 - [x] El diff de un commit y el del árbol se pintan según la extensión. Cada rama del grafo conserva su color.
+
+### 19. Acceso MCP — hecho en 0.13.0
+
+- [x] Preferencias muestra las herramientas y el texto para conectar Cursor, Claude, Codex u otro cliente.
 
 ### Más adelante, en ese mismo menú
 

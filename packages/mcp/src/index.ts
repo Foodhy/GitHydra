@@ -13,7 +13,7 @@ import { readSessionPath, resolveRepoPath } from "./session.js";
  */
 
 const server = new Server(
-  { name: "githydra", version: "0.7.0" },
+  { name: "githydra", version: "0.13.0" },
   { capabilities: { tools: {} } },
 );
 

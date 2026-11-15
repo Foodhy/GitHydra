@@ -144,6 +144,29 @@ fn pty_close(id: u64) -> Result<(), String> {
     pty::close(id)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpLaunch {
+    root: String,
+    command: String,
+    args: Vec<String>,
+}
+
+#[tauri::command]
+fn mcp_launch() -> McpLaunch {
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest
+        .parent()
+        .and_then(|path| path.parent())
+        .unwrap_or(manifest.as_path());
+    let root = root.display().to_string();
+    McpLaunch {
+        command: "pnpm".into(),
+        args: vec!["--dir".into(), root.clone(), "mcp".into()],
+        root,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -176,7 +199,8 @@ pub fn run() {
             pty_open,
             pty_write,
             pty_resize,
-            pty_close
+            pty_close,
+            mcp_launch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
