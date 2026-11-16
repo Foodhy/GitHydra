@@ -1,11 +1,17 @@
 import type {
   CommitAuthor,
+  CommitMessageCandidate,
   StashEntry,
   WorkingTreeEntry,
 } from "@githydra/contracts";
 import { type MouseEvent, useEffect, useState } from "react";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useWorkingTree } from "../../hooks/useWorkingTree";
+import {
+  type CommitAi,
+  commitAgentLabel,
+  readCommitAi,
+} from "../../lib/commit-ai";
 import { discardPrompt } from "../../lib/discard-prompt";
 import { formatWhen } from "../../lib/format";
 import { toGitClientError } from "../../lib/git/errors";
@@ -41,6 +47,11 @@ export function StagingPanel({
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [drafting, setDrafting] = useState(false);
+  const [candidates, setCandidates] = useState<CommitMessageCandidate[]>([]);
+  const [ai, setAi] = useState<CommitAi>({
+    enabled: true,
+    providers: ["cursor"],
+  });
   const [authors, setAuthors] = useState<CommitAuthor[]>([]);
   const [authorEmail, setAuthorEmail] = useState("");
   const [query, setQuery] = useState("");
@@ -72,6 +83,23 @@ export function StagingPanel({
       alive = false;
     };
   }, [path]);
+  useEffect(() => {
+    let alive = true;
+    readCommitAi()
+      .then((next) => {
+        if (alive) {
+          setAi(next);
+        }
+      })
+      .catch(() => {
+        if (alive) {
+          setAi({ enabled: true, providers: ["cursor"] });
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const needle = query.trim().toLowerCase();
   const visible = entries.filter((entry) =>
@@ -163,12 +191,26 @@ export function StagingPanel({
       setActionError("Pasa archivos a stage antes de generar el mensaje.");
       return;
     }
+    if (!ai.enabled || ai.providers.length === 0) {
+      setActionError("Elige un proveedor en Preferencias.");
+      return;
+    }
     setDrafting(true);
     setActionError(null);
+    setCandidates([]);
     try {
-      const draft = await tauriGit.generateCommitMessage(path);
-      setSummary(draft.summary);
-      setDescription(draft.description);
+      const drafts = await tauriGit.generateCommitMessage(path, ai.providers);
+      const ready = drafts.filter(
+        (item) => !item.error && item.summary.trim().length > 0,
+      );
+      if (ready.length === 1) {
+        const [draft] = ready;
+        setSummary(draft.summary);
+        setDescription(draft.description);
+        setCandidates(drafts.filter((item) => item.error));
+      } else {
+        setCandidates(drafts);
+      }
     } catch (reason: unknown) {
       setActionError(toGitClientError(reason).message);
     } finally {
@@ -279,27 +321,57 @@ export function StagingPanel({
           void confirmCommit();
         }}
       >
+        {candidates.length > 0 ? (
+          <div className="mb-2 grid gap-1">
+            {candidates.map((candidate) =>
+              candidate.error ? (
+                <p key={candidate.provider} className="text-xs text-warn">
+                  {commitAgentLabel(candidate.provider)}: {candidate.error}
+                </p>
+              ) : (
+                <button
+                  key={candidate.provider}
+                  type="button"
+                  onClick={() => {
+                    setSummary(candidate.summary);
+                    setDescription(candidate.description);
+                  }}
+                  className="rounded border border-line px-2 py-1 text-left hover:bg-surface"
+                >
+                  <span className="block text-[11px] text-muted">
+                    {commitAgentLabel(candidate.provider)}
+                  </span>
+                  <span className="block truncate text-xs">
+                    {candidate.summary}
+                  </span>
+                </button>
+              ),
+            )}
+          </div>
+        ) : null}
         <div className="relative mb-2">
           <input
             value={summary}
             disabled={busy || running || drafting}
             placeholder="Resumen del commit"
             onChange={(event) => setSummary(event.target.value)}
-            className="w-full rounded border border-line bg-surface py-1.5 pr-9 pl-2 text-sm disabled:text-muted"
+            className={`w-full rounded border border-line bg-surface py-1.5 pl-2 text-sm disabled:text-muted ${ai.enabled ? "pr-9" : "pr-2"}`}
           />
-          <button
-            type="button"
-            title={drafting ? "Generando el mensaje…" : "Generar mensaje"}
-            aria-label="Generar mensaje"
-            aria-busy={drafting}
-            disabled={busy || running || drafting}
-            onClick={() => {
-              void draftMessage();
-            }}
-            className="absolute top-1/2 right-1 grid h-7 w-7 -translate-y-1/2 place-items-center rounded text-accent hover:bg-accent/10 disabled:text-muted"
-          >
-            <SparkleIcon className={drafting ? "animate-pulse" : ""} />
-          </button>
+          {ai.enabled ? (
+            <button
+              type="button"
+              title={drafting ? "Generando el mensaje…" : "Generar mensaje"}
+              aria-label="Generar mensaje"
+              aria-busy={drafting}
+              disabled={busy || running || drafting}
+              onClick={() => {
+                void draftMessage();
+              }}
+              className="absolute top-1/2 right-1 grid h-7 w-7 -translate-y-1/2 place-items-center rounded text-accent hover:bg-accent/10 disabled:text-muted"
+            >
+              <SparkleIcon className={drafting ? "animate-pulse" : ""} />
+            </button>
+          ) : null}
         </div>
         <textarea
           value={description}

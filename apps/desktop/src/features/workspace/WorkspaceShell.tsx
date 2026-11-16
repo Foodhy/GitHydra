@@ -18,7 +18,7 @@ import {
 import { createPortal } from "react-dom";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useRepoSync } from "../../hooks/useRepoSync";
-import { syncWindowPanels } from "../../lib/file-menu";
+import { bindTerminalPanel, syncWindowPanels } from "../../lib/file-menu";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { useRepoSession } from "../../stores/repo-session";
 import { BranchPanel } from "../branches/BranchPanel";
@@ -48,6 +48,7 @@ import {
   type PanelId,
   panelLabel,
   place,
+  restoreTerminal,
   setRatio,
 } from "./layout-tree";
 import { TopBar } from "./TopBar";
@@ -127,7 +128,14 @@ export function WorkspaceShell({ path }: { path: string }) {
     });
   }, []);
 
+  useEffect(() => {
+    return bindTerminalPanel(() => {
+      setTree((current) => restoreTerminal(current));
+    });
+  }, []);
+
   const open = centerOpen(tree);
+  const terminalOpen = findPane(tree, "terminal") !== null;
 
   useEffect(() => {
     syncWindowPanels({
@@ -137,8 +145,9 @@ export function WorkspaceShell({ path }: { path: string }) {
         editor: open.editor,
         browser: open.browser,
       },
+      terminal: terminalOpen,
     });
-  }, [open.browser, open.editor, open.history]);
+  }, [open.browser, open.editor, open.history, terminalOpen]);
 
   useEffect(() => {
     return () => {
@@ -147,6 +156,7 @@ export function WorkspaceShell({ path }: { path: string }) {
       syncWindowPanels({
         enabled: false,
         open: { history: false, editor: false, browser: false },
+        terminal: false,
       });
     };
   }, []);
@@ -392,7 +402,12 @@ function LayoutBranch({
 }
 
 function canClose(panel: PanelId): boolean {
-  return panel === "history" || panel === "editor" || panel === "browser";
+  return (
+    panel === "history" ||
+    panel === "editor" ||
+    panel === "browser" ||
+    panel === "terminal"
+  );
 }
 
 function staysMounted(panel: PanelId): boolean {

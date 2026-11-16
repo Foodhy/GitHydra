@@ -70,6 +70,8 @@ Desde la raíz del monorepo:
 
 La secuencia viva, con un solo paso activo, está en [ROADMAP.md](ROADMAP.md). Esta página describe las capas; el orden de construcción está allí.
 
+Varias carpetas para un solo `.git` (worktrees enlazados) están descritas en [WORKTREES.md](WORKTREES.md). No hay comandos todavía.
+
 ## Dependencias
 
 pnpm workspaces separan la app del MCP. Renovate agrupa `@tauri-apps/*`, `tauri` y React. La toolchain de Rust queda fijada en `rust-toolchain.toml` (`stable` + rustfmt + clippy). Node `>= 22`.

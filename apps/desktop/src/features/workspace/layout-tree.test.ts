@@ -9,6 +9,7 @@ import {
   parseLayout,
   place,
   placementOf,
+  restoreTerminal,
   setRatio,
   zoneAt,
   zoneRect,
@@ -80,7 +81,20 @@ const closed = closePanel(closePanel(home, "browser"), "editor");
 assert.equal(centerOpen(closed).browser, false);
 assert.equal(centerOpen(closed).editor, false);
 assert.equal(findPane(closed, "terminal")?.tabs[0], "terminal");
-assert.equal(closePanel(closed, "terminal"), closed);
+assert.equal(closePanel(closed, "branches"), closed);
+assert.equal(closePanel(closed, "changes"), closed);
+const withoutTerminal = closePanel(closed, "terminal");
+assert.equal(findPane(withoutTerminal, "terminal"), null);
+assert.deepEqual(parseLayout(JSON.stringify(withoutTerminal)), withoutTerminal);
+assert.equal(restoreTerminal(home), home);
+const restored = restoreTerminal(withoutTerminal, ids());
+assert.deepEqual(findPane(restored, "terminal")?.tabs, ["terminal"]);
+assert.equal(placementOf(restored, "terminal")?.axis, "y");
+assert.equal(placementOf(restored, "terminal")?.side, "second");
+assert.equal(restored.kind, "split");
+if (restored.kind === "split") {
+  assert.equal(restored.ratio, 0.78);
+}
 const reopened = openPanel(closed, "browser");
 assert.equal(findPane(reopened, "browser")?.active, "browser");
 assert.equal(findPane(reopened, "history")?.tabs.includes("browser"), true);

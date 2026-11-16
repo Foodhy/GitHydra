@@ -1,11 +1,9 @@
 import { Link } from "@tanstack/react-router";
 import {
-  Archive,
   ArrowDownToLine,
   ArrowUpFromLine,
   CloudDownload,
   FolderGit2,
-  GitBranch,
   Redo2,
   Settings,
   SquareTerminal,
@@ -23,7 +21,13 @@ import {
 import { operationStatus, useOperation } from "../../stores/operation";
 import { useRepoSession } from "../../stores/repo-session";
 import { LayoutMenu } from "./LayoutMenu";
-import type { LayoutNode } from "./layout-tree";
+import {
+  closePanel,
+  findPane,
+  type LayoutNode,
+  restoreTerminal,
+} from "./layout-tree";
+import { BranchButton, StashButton } from "./ToolbarActions";
 
 export function TopBar({
   path,
@@ -43,6 +47,7 @@ export function TopBar({
     ? "HEAD suelto"
     : (info?.currentBranch ?? "sin rama");
   const status = operationStatus(branch, operation);
+  const terminalOpen = findPane(layout, "terminal") !== null;
 
   function run(
     kind: "fetch" | "pull" | "push",
@@ -121,13 +126,19 @@ export function TopBar({
         >
           <ArrowUpFromLine size={16} />
         </ToolButton>
-        <ToolButton label="Branch">
-          <GitBranch size={16} />
-        </ToolButton>
-        <ToolButton label="Stash">
-          <Archive size={16} />
-        </ToolButton>
-        <ToolButton label="Terminal">
+        <BranchButton path={path} onRepositoryChanged={onRepositoryChanged} />
+        <StashButton path={path} onRepositoryChanged={onRepositoryChanged} />
+        <ToolButton
+          label={terminalOpen ? "Cerrar terminal" : "Abrir terminal"}
+          pressed={terminalOpen}
+          onClick={() => {
+            onApplyLayout(
+              terminalOpen
+                ? closePanel(layout, "terminal")
+                : restoreTerminal(layout),
+            );
+          }}
+        >
           <SquareTerminal size={16} />
         </ToolButton>
       </div>

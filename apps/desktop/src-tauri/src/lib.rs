@@ -1,3 +1,4 @@
+mod apps;
 mod browser;
 mod dock;
 mod git;
@@ -100,57 +101,259 @@ fn list_commit_authors(path: String) -> Result<Vec<git::CommitAuthor>, git::GitE
     in_repo(&path, || git::list_commit_authors(&path))
 }
 
-#[tauri::command]
-fn generate_commit_message(path: String) -> Result<git::CommitMessageDraft, git::GitError> {
-    let staged = in_repo(&path, || git::staged_commit_prompt(&path))?;
-    let reply = ask_commit_agent(&staged.root, &staged.prompt)?;
-    git::clean_commit_reply(&reply)
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommitMessageCandidate {
+    provider: String,
+    summary: String,
+    description: String,
+    error: Option<String>,
 }
 
-fn agent_program() -> Result<std::path::PathBuf, git::GitError> {
+struct TempReply(Option<std::path::PathBuf>);
+
+impl Drop for TempReply {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[tauri::command]
+fn generate_commit_message(
+    path: String,
+    providers: Vec<String>,
+) -> Result<Vec<CommitMessageCandidate>, git::GitError> {
+    let providers = normalize_commit_providers(&providers)?;
+    let staged = in_repo(&path, || git::staged_commit_prompt(&path))?;
+    let prompt = staged.prompt;
+    let root = staged.root;
+    let results = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for provider in providers {
+            let prompt = prompt.clone();
+            let root = root.clone();
+            handles.push((
+                provider,
+                scope.spawn(move || ask_commit_provider(provider, &root, &prompt)),
+            ));
+        }
+        handles
+            .into_iter()
+            .map(|(provider, handle)| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| failed_candidate(provider, "El proveedor se detuvo."))
+            })
+            .collect::<Vec<_>>()
+    });
+    if results.iter().all(|item| item.error.is_some()) {
+        let detail = results
+            .iter()
+            .map(|item| {
+                format!(
+                    "{}: {}",
+                    provider_label(&item.provider),
+                    item.error.as_deref().unwrap_or("falló")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Err(git::GitError::Io(detail));
+    }
+    Ok(results)
+}
+
+fn normalize_commit_providers(providers: &[String]) -> Result<Vec<&'static str>, git::GitError> {
+    let mut chosen = Vec::new();
+    for raw in providers {
+        let id = match raw.trim() {
+            "cursor" => "cursor",
+            "claude" => "claude",
+            "codex" => "codex",
+            "" => continue,
+            other => {
+                return Err(git::GitError::Io(format!("Proveedor desconocido: {other}")));
+            }
+        };
+        if !chosen.contains(&id) {
+            chosen.push(id);
+        }
+    }
+    if chosen.is_empty() {
+        return Err(git::GitError::Io(
+            "Elige un proveedor en Preferencias.".into(),
+        ));
+    }
+    Ok(chosen)
+}
+
+fn provider_label(id: &str) -> &'static str {
+    match id {
+        "cursor" => "Cursor",
+        "claude" => "Claude",
+        "codex" => "Codex",
+        _ => "Proveedor",
+    }
+}
+
+fn failed_candidate(provider: &str, error: &str) -> CommitMessageCandidate {
+    CommitMessageCandidate {
+        provider: provider.to_string(),
+        summary: String::new(),
+        description: String::new(),
+        error: Some(error.to_string()),
+    }
+}
+
+fn ask_commit_provider(provider: &str, root: &str, prompt: &str) -> CommitMessageCandidate {
+    match reply_from_provider(provider, root, prompt) {
+        Ok(text) => match git::clean_commit_reply(&text) {
+            Ok(draft) => CommitMessageCandidate {
+                provider: provider.to_string(),
+                summary: draft.summary,
+                description: draft.description,
+                error: None,
+            },
+            Err(err) => failed_candidate(provider, &git_detail(&err)),
+        },
+        Err(err) => failed_candidate(provider, &git_detail(&err)),
+    }
+}
+
+fn git_detail(err: &git::GitError) -> String {
+    let text = err.to_string();
+    text.split_once('|')
+        .map(|(_, detail)| detail.to_string())
+        .unwrap_or(text)
+}
+
+fn find_program(name: &str) -> Result<std::path::PathBuf, git::GitError> {
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
-            let candidate = dir.join("agent");
+            let candidate = dir.join(name);
             if candidate.is_file() {
                 return Ok(candidate);
             }
         }
     }
     if let Some(home) = std::env::var_os("HOME") {
-        let candidate = std::path::PathBuf::from(home).join(".local/bin/agent");
+        let candidate = std::path::PathBuf::from(home).join(".local/bin").join(name);
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
-    Err(git::GitError::Io(
-        "No está `agent` en PATH. Instala Cursor Agent para generar el mensaje.".into(),
-    ))
+    Err(git::GitError::Io(format!("No está `{name}` en PATH.")))
 }
 
-fn ask_commit_agent(root: &str, prompt: &str) -> Result<String, git::GitError> {
-    let mut child = std::process::Command::new(agent_program()?)
-        .args([
-            "-p",
-            "--mode",
-            "ask",
-            "--trust",
-            "--output-format",
-            "text",
-            "--workspace",
-            root,
-        ])
+fn reply_from_provider(provider: &str, root: &str, prompt: &str) -> Result<String, git::GitError> {
+    let (program, args, reply_file) = provider_launch(provider, root)?;
+    let reply = TempReply(reply_file);
+    let stdout = run_cli(&program, &args, root, prompt)?;
+    if let Some(path) = reply.0.as_ref() {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if text.trim().is_empty() {
+            return Err(git::GitError::Io(format!(
+                "{} no devolvió un mensaje.",
+                provider_label(provider)
+            )));
+        }
+        return Ok(text);
+    }
+    Ok(stdout)
+}
+
+fn provider_launch(
+    provider: &str,
+    root: &str,
+) -> Result<(std::path::PathBuf, Vec<String>, Option<std::path::PathBuf>), git::GitError> {
+    match provider {
+        "cursor" => Ok((
+            find_program("agent")?,
+            vec![
+                "-p".into(),
+                "--mode".into(),
+                "ask".into(),
+                "--trust".into(),
+                "--output-format".into(),
+                "text".into(),
+                "--workspace".into(),
+                root.to_string(),
+            ],
+            None,
+        )),
+        "claude" => Ok((
+            find_program("claude")?,
+            vec![
+                "-p".into(),
+                "--output-format".into(),
+                "text".into(),
+                "--tools".into(),
+                String::new(),
+                "--permission-mode".into(),
+                "plan".into(),
+                "--no-session-persistence".into(),
+                "--strict-mcp-config".into(),
+            ],
+            None,
+        )),
+        "codex" => {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or(0);
+            let file = std::env::temp_dir().join(format!(
+                "githydra-commit-codex-{}-{nanos}.txt",
+                std::process::id()
+            ));
+            Ok((
+                find_program("codex")?,
+                vec![
+                    "exec".into(),
+                    "-s".into(),
+                    "read-only".into(),
+                    "-C".into(),
+                    root.to_string(),
+                    "--ephemeral".into(),
+                    "--color".into(),
+                    "never".into(),
+                    "--output-last-message".into(),
+                    file.display().to_string(),
+                ],
+                Some(file),
+            ))
+        }
+        _ => Err(git::GitError::Io(format!(
+            "Proveedor desconocido: {provider}"
+        ))),
+    }
+}
+
+fn run_cli(
+    program: &std::path::Path,
+    args: &[String],
+    root: &str,
+    prompt: &str,
+) -> Result<String, git::GitError> {
+    let name = program
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("agente");
+    let mut child = std::process::Command::new(program)
+        .args(args)
         .current_dir(root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|err| git::GitError::Io(format!("No se pudo lanzar agent: {err}")))?;
+        .map_err(|err| git::GitError::Io(format!("No se pudo lanzar {name}: {err}")))?;
 
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
             stop_agent(&mut child);
-            return Err(git::GitError::Io("agent no aceptó el prompt".into()));
+            return Err(git::GitError::Io(format!("{name} no aceptó el prompt")));
         }
     };
     let prompt = prompt.to_string();
@@ -165,7 +368,7 @@ fn ask_commit_agent(root: &str, prompt: &str) -> Result<String, git::GitError> {
         None => {
             stop_agent(&mut child);
             let _ = writer.join();
-            return Err(git::GitError::Io("agent no devolvió salida".into()));
+            return Err(git::GitError::Io(format!("{name} no devolvió salida")));
         }
     };
     let mut stderr = match child.stderr.take() {
@@ -173,7 +376,7 @@ fn ask_commit_agent(root: &str, prompt: &str) -> Result<String, git::GitError> {
         None => {
             stop_agent(&mut child);
             let _ = writer.join();
-            return Err(git::GitError::Io("agent no devolvió errores".into()));
+            return Err(git::GitError::Io(format!("{name} no devolvió errores")));
         }
     };
     let out_handle = std::thread::spawn(move || {
@@ -198,9 +401,9 @@ fn ask_commit_agent(root: &str, prompt: &str) -> Result<String, git::GitError> {
                 let _ = writer.join();
                 let _ = out_handle.join();
                 let _ = err_handle.join();
-                return Err(git::GitError::Io(
-                    "agent tardó más de 45 s y se detuvo.".into(),
-                ));
+                return Err(git::GitError::Io(format!(
+                    "{name} tardó más de 45 s y se detuvo."
+                )));
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
             Err(err) => {
@@ -209,7 +412,7 @@ fn ask_commit_agent(root: &str, prompt: &str) -> Result<String, git::GitError> {
                 let _ = out_handle.join();
                 let _ = err_handle.join();
                 return Err(git::GitError::Io(format!(
-                    "No se pudo esperar a agent: {err}"
+                    "No se pudo esperar a {name}: {err}"
                 )));
             }
         }
@@ -220,9 +423,9 @@ fn ask_commit_agent(root: &str, prompt: &str) -> Result<String, git::GitError> {
     if !status.success() {
         let detail = clip_agent_error(errors.trim());
         return Err(git::GitError::Io(if detail.is_empty() {
-            format!("agent terminó con código {}", status.code().unwrap_or(-1))
+            format!("{name} terminó con código {}", status.code().unwrap_or(-1))
         } else {
-            format!("agent falló: {detail}")
+            format!("{name} falló: {detail}")
         }));
     }
     Ok(output)
@@ -519,6 +722,7 @@ pub fn run() {
             pty_resize,
             pty_close,
             mcp_launch,
+            apps::installed_apps,
             browser::browser_navigate,
             browser::browser_set_bounds,
             browser::browser_set_visible,
@@ -531,4 +735,27 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod commit_provider_tests {
+    use super::normalize_commit_providers;
+
+    #[test]
+    fn keeps_order_and_drops_duplicates() {
+        let chosen = normalize_commit_providers(&[
+            "claude".into(),
+            "cursor".into(),
+            "claude".into(),
+            "  ".into(),
+        ])
+        .expect("proveedores");
+        assert_eq!(chosen, vec!["claude", "cursor"]);
+    }
+
+    #[test]
+    fn rejects_unknown_and_empty() {
+        assert!(normalize_commit_providers(&["cursor".into(), "gpt".into()]).is_err());
+        assert!(normalize_commit_providers(&[]).is_err());
+    }
 }

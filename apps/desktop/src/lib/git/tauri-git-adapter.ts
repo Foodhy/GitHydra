@@ -2,7 +2,7 @@ import type {
   BranchRef,
   CommitAuthor,
   CommitDiff,
-  CommitMessageDraft,
+  CommitMessageCandidate,
   CommitPage,
   GitPort,
   RepositoryInfo,
@@ -52,8 +52,11 @@ export const tauriGit: GitPort = {
   listCommitAuthors(path) {
     return invoke<CommitAuthor[]>("list_commit_authors", { path });
   },
-  generateCommitMessage(path) {
-    return invoke<CommitMessageDraft>("generate_commit_message", { path });
+  generateCommitMessage(path, providers) {
+    return invoke<CommitMessageCandidate[]>("generate_commit_message", {
+      path,
+      providers,
+    });
   },
   checkoutBranch(path, name) {
     return invoke<void>("checkout_branch", { path, name });

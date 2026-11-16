@@ -32,19 +32,36 @@ interface ToggleItems {
 }
 
 let toggles: ToggleItems | null = null;
-let panels: Record<CenterView, CheckMenuItem> | null = null;
+let panels:
+  | (Record<CenterView, CheckMenuItem> & {
+      terminal: CheckMenuItem;
+    })
+  | null = null;
 let pending: Promise<void> | null = null;
+let showTerminal: (() => void) | null = null;
 let panelState: {
   enabled: boolean;
   open: Record<CenterView, boolean>;
+  terminal: boolean;
 } = {
   enabled: false,
   open: { history: false, editor: false, browser: false },
+  terminal: false,
 };
+
+export function bindTerminalPanel(show: () => void): () => void {
+  showTerminal = show;
+  return () => {
+    if (showTerminal === show) {
+      showTerminal = null;
+    }
+  };
+}
 
 export function syncWindowPanels(state: {
   enabled: boolean;
   open: Record<CenterView, boolean>;
+  terminal: boolean;
 }): void {
   panelState = state;
   if (!panels) {
@@ -54,6 +71,8 @@ export function syncWindowPanels(state: {
     void panels[view].setEnabled(state.enabled);
     void panels[view].setChecked(state.enabled && state.open[view]);
   }
+  void panels.terminal.setEnabled(state.enabled);
+  void panels.terminal.setChecked(state.enabled && state.terminal);
 }
 
 export function syncFileMenu(state: {
@@ -109,6 +128,19 @@ async function createFileMenu(): Promise<void> {
   const historyPanel = await panelItem("show-history", "Historial", "history");
   const editorPanel = await panelItem("show-editor", "Editor", "editor");
   const browserPanel = await panelItem("show-browser", "Browser", "browser");
+  const terminalPanel = await CheckMenuItem.new({
+    id: "show-terminal-panel",
+    text: "Terminal",
+    checked: false,
+    enabled: false,
+    action: () => {
+      const item = panels?.terminal;
+      if (item) {
+        void item.setChecked(true);
+      }
+      run(showTerminalPanel);
+    },
+  });
 
   const file = await Submenu.new({
     text: "File",
@@ -177,6 +209,7 @@ async function createFileMenu(): Promise<void> {
         historyPanel,
         editorPanel,
         browserPanel,
+        terminalPanel,
       ]);
     }
   }
@@ -187,6 +220,7 @@ async function createFileMenu(): Promise<void> {
     history: historyPanel,
     editor: editorPanel,
     browser: browserPanel,
+    terminal: terminalPanel,
   };
   syncWindowPanels(panelState);
   await previous?.close();
@@ -210,6 +244,10 @@ function panelItem(
       run(() => showCenterView(view));
     },
   });
+}
+
+function showTerminalPanel(): void {
+  showTerminal?.();
 }
 
 function run(action: () => void | Promise<void>): void {

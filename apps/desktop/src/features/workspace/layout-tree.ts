@@ -62,7 +62,7 @@ export const panelLabel: Record<PanelId, string> = {
   terminal: "Terminal",
 };
 
-const PERMANENT: PanelId[] = ["branches", "changes", "terminal"];
+const PERMANENT: PanelId[] = ["branches", "changes"];
 const CENTER: CenterView[] = ["history", "editor", "browser"];
 
 export function nextLayoutId(): string {
@@ -146,10 +146,20 @@ export function openPanel(tree: LayoutNode, panel: PanelId): LayoutNode {
 }
 
 export function closePanel(tree: LayoutNode, panel: PanelId): LayoutNode {
-  if (!isCenter(panel)) {
+  if (!isCenter(panel) && panel !== "terminal") {
     return tree;
   }
   return extract(tree, panel) ?? tree;
+}
+
+export function restoreTerminal(
+  tree: LayoutNode,
+  ids: () => string = nextLayoutId,
+): LayoutNode {
+  if (findPane(tree, "terminal")) {
+    return activate(tree, "terminal");
+  }
+  return split(ids(), "y", 0.78, tree, pane(ids(), ["terminal"]));
 }
 
 export function place(

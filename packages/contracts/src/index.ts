@@ -79,6 +79,15 @@ export interface CommitMessageDraft {
   description: string;
 }
 
+export type CommitAgentId = "cursor" | "claude" | "codex";
+
+export interface CommitMessageCandidate {
+  provider: CommitAgentId;
+  summary: string;
+  description: string;
+  error: string | null;
+}
+
 export interface CommitAuthor {
   name: string;
   email: string;
@@ -125,7 +134,10 @@ export interface GitPort {
     authorEmail: string,
   ): Promise<void>;
   listCommitAuthors(path: string): Promise<CommitAuthor[]>;
-  generateCommitMessage(path: string): Promise<CommitMessageDraft>;
+  generateCommitMessage(
+    path: string,
+    providers: CommitAgentId[],
+  ): Promise<CommitMessageCandidate[]>;
   checkoutBranch(path: string, name: string): Promise<void>;
   createBranch(path: string, name: string): Promise<void>;
   createBranchAt(path: string, name: string, sha: string): Promise<void>;

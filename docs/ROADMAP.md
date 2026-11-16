@@ -100,7 +100,7 @@ Ya está en el primer commit:
 - [ ] Merge
 - [ ] Rebase
 - [x] Checkout de un commit, con `HEAD` suelto
-- [ ] Worktree
+- [ ] Worktree — diseño en [WORKTREES.md](WORKTREES.md), todavía sin paso activo
 - [ ] Cherry-pick
 - [ ] Reset de la rama a un commit
 - [ ] Revert

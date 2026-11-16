@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { useOverlay } from "../../stores/overlay";
 import { pathFromDrop, shellToken, TERMINAL_INSERT } from "./insert";
+import { withCarriageReturn } from "./newline";
 import {
   addTerminal,
   closeTerminal,
@@ -314,12 +315,19 @@ function TerminalSession({
     }
 
     void (async () => {
+      let precededByCr = false;
       const output = await listen<{ id: number; data: string }>(
         "pty-output",
         (event) => {
-          if (event.payload.id === session.id) {
-            term.write(event.payload.data);
+          if (event.payload.id !== session.id) {
+            return;
           }
+          const normalized = withCarriageReturn(
+            event.payload.data,
+            precededByCr,
+          );
+          precededByCr = normalized.precededByCr;
+          term.write(normalized.text);
         },
       );
       stops.push(output);

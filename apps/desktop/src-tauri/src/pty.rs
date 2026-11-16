@@ -44,6 +44,10 @@ pub fn open(app: AppHandle, path: &str) -> Result<u64, String> {
         .map_err(|err| err.to_string())?;
     let mut command = CommandBuilder::new(shell);
     command.cwd(cwd);
+    // xterm.js is the emulator. A parent TERM of "dumb" makes agent TUIs
+    // redraw every keystroke on its own line.
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
     let child = pair
         .slave
         .spawn_command(command)

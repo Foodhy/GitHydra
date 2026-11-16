@@ -2,7 +2,7 @@
 
 `pnpm build` ya genera el `.app` y el `.dmg`. No hay un empaquetador aparte. Este archivo es el procedimiento para producir el disco cuando haga falta, en esta máquina.
 
-La firma y la notarización de Apple, para repartir el `.app` fuera de esta Mac, quedan fuera de esta fase. El disco sirve para instalar GitHydra aquí. En otra Mac, Gatekeeper lo bloquea hasta que esté firmado.
+La firma y la notarización de Apple quedan fuera de esta fase. El disco se puede copiar a otra Mac Apple Silicon; Gatekeeper lo bloquea al abrirlo. Cómo pasarlo está en «Otra Mac».
 
 ## Requisitos
 
@@ -46,6 +46,23 @@ ls -lh apps/desktop/src-tauri/target/release/bundle/dmg
 ```
 
 Tiene que aparecer un `.dmg`. Abrirlo monta un volumen con `GitHydra.app`. Arrastrar esa app a Aplicaciones es la instalación desde el disco. En esta Mac también se puede abrir el `.app` del bundle directamente, o usar `pnpm install-app`.
+
+## Otra Mac
+
+El disco es solo `aarch64`. En un Mac Intel no abre.
+
+Copia el `.dmg` de `apps/desktop/src-tauri/target/release/bundle/dmg/`. En la otra Mac, ábrelo y arrastra `GitHydra.app` a Aplicaciones. El primer arranque lo bloquea Gatekeeper: la firma del build es ad hoc, sin equipo de Apple y sin notarizar.
+
+Clic derecho sobre `GitHydra.app` → **Abrir** → **Abrir**. Si sigue bloqueada: Ajustes del Sistema → Privacidad y seguridad → **Abrir de todas formas**.
+
+Si el clic derecho no basta, en la Terminal de esa Mac:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/GitHydra.app
+open /Applications/GitHydra.app
+```
+
+`xattr` quita la marca de cuarentena que macOS pone al copiar el archivo. No firma la app.
 
 ## Qué no hace este build
 
