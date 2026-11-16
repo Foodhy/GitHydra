@@ -288,6 +288,64 @@ export function confirmDiscard(session: EditorSession): EditorSession {
   return closeTab(session, session.pendingClose);
 }
 
+function mappedWorkPath(path: string, from: string, to: string): string | null {
+  if (path === from) {
+    return to;
+  }
+  const prefix = `${from}/`;
+  if (path.startsWith(prefix)) {
+    return `${to}/${path.slice(prefix.length)}`;
+  }
+  return null;
+}
+
+export function retargetWorkPath(
+  session: EditorSession,
+  from: string,
+  to: string,
+): EditorSession {
+  if (from === to) {
+    return session;
+  }
+  let active = session.active;
+  let pendingClose = session.pendingClose;
+  const tabs = session.tabs.map((tab) => {
+    if (tab.sha !== null) {
+      return tab;
+    }
+    const next = mappedWorkPath(tab.path, from, to);
+    if (!next) {
+      return tab;
+    }
+    const id = bufferId(next, null);
+    if (active === tab.id) {
+      active = id;
+    }
+    if (pendingClose === tab.id) {
+      pendingClose = id;
+    }
+    return { ...tab, id, path: next };
+  });
+  return { tabs, active, pendingClose };
+}
+
+export function closeWorkPath(
+  session: EditorSession,
+  target: string,
+): EditorSession {
+  const prefix = `${target}/`;
+  let next = session;
+  for (const tab of session.tabs) {
+    if (
+      tab.sha === null &&
+      (tab.path === target || tab.path.startsWith(prefix))
+    ) {
+      next = closeTab(next, tab.id);
+    }
+  }
+  return next;
+}
+
 export function closeTab(session: EditorSession, id: string): EditorSession {
   const index = session.tabs.findIndex((tab) => tab.id === id);
   if (index < 0) {

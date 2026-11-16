@@ -1,3 +1,5 @@
+mod browser;
+mod dock;
 mod git;
 mod pty;
 mod watch;
@@ -76,8 +78,168 @@ fn unstage_paths(path: String, paths: Vec<String>) -> Result<(), git::GitError> 
 }
 
 #[tauri::command]
-fn create_commit(path: String, summary: String, description: String) -> Result<(), git::GitError> {
-    in_repo(&path, || git::create_commit(&path, &summary, &description))
+fn discard_paths(path: String, paths: Vec<String>) -> Result<(), git::GitError> {
+    in_repo(&path, || git::discard_paths(&path, &paths))
+}
+
+#[tauri::command]
+fn create_commit(
+    path: String,
+    summary: String,
+    description: String,
+    author_name: String,
+    author_email: String,
+) -> Result<(), git::GitError> {
+    in_repo(&path, || {
+        git::create_commit(&path, &summary, &description, &author_name, &author_email)
+    })
+}
+
+#[tauri::command]
+fn list_commit_authors(path: String) -> Result<Vec<git::CommitAuthor>, git::GitError> {
+    in_repo(&path, || git::list_commit_authors(&path))
+}
+
+#[tauri::command]
+fn generate_commit_message(path: String) -> Result<git::CommitMessageDraft, git::GitError> {
+    let staged = in_repo(&path, || git::staged_commit_prompt(&path))?;
+    let reply = ask_commit_agent(&staged.root, &staged.prompt)?;
+    git::clean_commit_reply(&reply)
+}
+
+fn agent_program() -> Result<std::path::PathBuf, git::GitError> {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("agent");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let candidate = std::path::PathBuf::from(home).join(".local/bin/agent");
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(git::GitError::Io(
+        "No está `agent` en PATH. Instala Cursor Agent para generar el mensaje.".into(),
+    ))
+}
+
+fn ask_commit_agent(root: &str, prompt: &str) -> Result<String, git::GitError> {
+    let mut child = std::process::Command::new(agent_program()?)
+        .args([
+            "-p",
+            "--mode",
+            "ask",
+            "--trust",
+            "--output-format",
+            "text",
+            "--workspace",
+            root,
+        ])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| git::GitError::Io(format!("No se pudo lanzar agent: {err}")))?;
+
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            stop_agent(&mut child);
+            return Err(git::GitError::Io("agent no aceptó el prompt".into()));
+        }
+    };
+    let prompt = prompt.to_string();
+    let writer = std::thread::spawn(move || {
+        use std::io::Write;
+        let _ = stdin.write_all(prompt.as_bytes());
+        let _ = stdin.flush();
+    });
+
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            stop_agent(&mut child);
+            let _ = writer.join();
+            return Err(git::GitError::Io("agent no devolvió salida".into()));
+        }
+    };
+    let mut stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            stop_agent(&mut child);
+            let _ = writer.join();
+            return Err(git::GitError::Io("agent no devolvió errores".into()));
+        }
+    };
+    let out_handle = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = String::new();
+        let _ = stdout.read_to_string(&mut buf);
+        buf
+    });
+    let err_handle = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = String::new();
+        let _ = stderr.read_to_string(&mut buf);
+        buf
+    });
+
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() > std::time::Duration::from_secs(45) => {
+                stop_agent(&mut child);
+                let _ = writer.join();
+                let _ = out_handle.join();
+                let _ = err_handle.join();
+                return Err(git::GitError::Io(
+                    "agent tardó más de 45 s y se detuvo.".into(),
+                ));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(err) => {
+                stop_agent(&mut child);
+                let _ = writer.join();
+                let _ = out_handle.join();
+                let _ = err_handle.join();
+                return Err(git::GitError::Io(format!(
+                    "No se pudo esperar a agent: {err}"
+                )));
+            }
+        }
+    };
+    let _ = writer.join();
+    let output = out_handle.join().unwrap_or_default();
+    let errors = err_handle.join().unwrap_or_default();
+    if !status.success() {
+        let detail = clip_agent_error(errors.trim());
+        return Err(git::GitError::Io(if detail.is_empty() {
+            format!("agent terminó con código {}", status.code().unwrap_or(-1))
+        } else {
+            format!("agent falló: {detail}")
+        }));
+    }
+    Ok(output)
+}
+
+fn stop_agent(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn clip_agent_error(detail: &str) -> String {
+    if detail.chars().count() <= 400 {
+        return detail.to_string();
+    }
+    let mut cut: String = detail.chars().take(400).collect();
+    cut.push('…');
+    cut
 }
 
 #[tauri::command]
@@ -123,6 +285,33 @@ fn create_tag(
 #[tauri::command]
 fn checkout_commit(path: String, sha: String) -> Result<(), git::GitError> {
     in_repo(&path, || git::checkout_commit(&path, &sha))
+}
+
+#[tauri::command]
+fn list_stashes(path: String) -> Result<Vec<git::StashEntry>, git::GitError> {
+    in_repo(&path, || git::list_stashes(&path))
+}
+
+#[tauri::command]
+fn save_stash(path: String, message: String, include_untracked: bool) -> Result<(), git::GitError> {
+    in_repo(&path, || {
+        git::save_stash(&path, &message, include_untracked)
+    })
+}
+
+#[tauri::command]
+fn apply_stash(path: String, index: u32) -> Result<(), git::GitError> {
+    in_repo(&path, || git::apply_stash(&path, index))
+}
+
+#[tauri::command]
+fn pop_stash(path: String, index: u32) -> Result<(), git::GitError> {
+    in_repo(&path, || git::pop_stash(&path, index))
+}
+
+#[tauri::command]
+fn drop_stash(path: String, index: u32) -> Result<(), git::GitError> {
+    in_repo(&path, || git::drop_stash(&path, index))
 }
 
 #[tauri::command]
@@ -185,8 +374,46 @@ fn search_workdir(path: String, query: String) -> Result<Vec<String>, git::GitEr
 }
 
 #[tauri::command]
+fn create_workdir_file(
+    path: String,
+    directory: String,
+    name: String,
+) -> Result<String, git::GitError> {
+    in_repo(&path, || {
+        git::files::create_workdir_file(&path, &directory, &name)
+    })
+}
+
+#[tauri::command]
+fn create_workdir_dir(
+    path: String,
+    directory: String,
+    name: String,
+) -> Result<String, git::GitError> {
+    in_repo(&path, || {
+        git::files::create_workdir_dir(&path, &directory, &name)
+    })
+}
+
+#[tauri::command]
+fn rename_workdir(path: String, file: String, name: String) -> Result<String, git::GitError> {
+    in_repo(&path, || git::files::rename_workdir(&path, &file, &name))
+}
+
+#[tauri::command]
+fn remove_workdir(path: String, file: String) -> Result<(), git::GitError> {
+    in_repo(&path, || git::files::remove_workdir(&path, &file))
+}
+
+#[tauri::command]
 fn cancel_git_operation() {
     git::activity::cancel();
+}
+
+#[tauri::command]
+fn set_dock_activity(app: tauri::AppHandle, kind: Option<String>) {
+    let kind = kind.filter(|value| !value.is_empty());
+    dock::set_activity(app, kind);
 }
 
 #[tauri::command]
@@ -253,7 +480,10 @@ pub fn run() {
             commit_diff,
             stage_paths,
             unstage_paths,
+            discard_paths,
             create_commit,
+            list_commit_authors,
+            generate_commit_message,
             checkout_branch,
             create_branch,
             create_branch_at,
@@ -262,6 +492,11 @@ pub fn run() {
             set_upstream,
             create_tag,
             checkout_commit,
+            list_stashes,
+            save_stash,
+            apply_stash,
+            pop_stash,
+            drop_stash,
             fetch,
             pull,
             push,
@@ -272,13 +507,27 @@ pub fn run() {
             read_workdir_file,
             write_workdir_file,
             search_workdir,
+            create_workdir_file,
+            create_workdir_dir,
+            rename_workdir,
+            remove_workdir,
             cancel_git_operation,
+            set_dock_activity,
             watch_repository,
             pty_open,
             pty_write,
             pty_resize,
             pty_close,
-            mcp_launch
+            mcp_launch,
+            browser::browser_navigate,
+            browser::browser_set_bounds,
+            browser::browser_set_visible,
+            browser::browser_back,
+            browser::browser_forward,
+            browser::browser_reload,
+            browser::browser_close,
+            browser::browser_close_all,
+            browser::browser_report_title
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

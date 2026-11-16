@@ -74,6 +74,25 @@ export interface WorkDiff {
   binary: boolean;
 }
 
+export interface CommitMessageDraft {
+  summary: string;
+  description: string;
+}
+
+export interface CommitAuthor {
+  name: string;
+  email: string;
+  detail: string;
+  current: boolean;
+}
+
+export interface StashEntry {
+  index: number;
+  message: string;
+  branch: string | null;
+  stashedAt: string;
+}
+
 /**
  * Puerto de lectura git. La UI y el servidor MCP hablan esta forma;
  * la implementación de escritorio vive en Rust (`git2`).
@@ -97,11 +116,16 @@ export interface GitPort {
   commitDiff(path: string, sha: string): Promise<CommitDiff>;
   stagePaths(path: string, paths: string[]): Promise<void>;
   unstagePaths(path: string, paths: string[]): Promise<void>;
+  discardPaths(path: string, paths: string[]): Promise<void>;
   createCommit(
     path: string,
     summary: string,
     description: string,
+    authorName: string,
+    authorEmail: string,
   ): Promise<void>;
+  listCommitAuthors(path: string): Promise<CommitAuthor[]>;
+  generateCommitMessage(path: string): Promise<CommitMessageDraft>;
   checkoutBranch(path: string, name: string): Promise<void>;
   createBranch(path: string, name: string): Promise<void>;
   createBranchAt(path: string, name: string, sha: string): Promise<void>;
@@ -121,4 +145,13 @@ export interface GitPort {
   cloneRepository(url: string, directory: string): Promise<RepositoryInfo>;
   initRepository(directory: string): Promise<RepositoryInfo>;
   readCommitFile(path: string, sha: string, file: string): Promise<string>;
+  listStashes(path: string): Promise<StashEntry[]>;
+  saveStash(
+    path: string,
+    message: string,
+    includeUntracked: boolean,
+  ): Promise<void>;
+  applyStash(path: string, index: number): Promise<void>;
+  popStash(path: string, index: number): Promise<void>;
+  dropStash(path: string, index: number): Promise<void>;
 }

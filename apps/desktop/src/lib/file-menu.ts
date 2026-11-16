@@ -1,9 +1,15 @@
 import {
+  CheckMenuItem,
   Menu,
   MenuItem,
   PredefinedMenuItem,
   Submenu,
 } from "@tauri-apps/api/menu";
+import {
+  CENTER_VIEWS,
+  type CenterView,
+  showCenterView,
+} from "../features/workspace/center-views";
 import { useCommandUi } from "../stores/command-ui";
 import {
   closeRepoTab,
@@ -26,7 +32,29 @@ interface ToggleItems {
 }
 
 let toggles: ToggleItems | null = null;
+let panels: Record<CenterView, CheckMenuItem> | null = null;
 let pending: Promise<void> | null = null;
+let panelState: {
+  enabled: boolean;
+  open: Record<CenterView, boolean>;
+} = {
+  enabled: false,
+  open: { history: false, editor: false, browser: false },
+};
+
+export function syncWindowPanels(state: {
+  enabled: boolean;
+  open: Record<CenterView, boolean>;
+}): void {
+  panelState = state;
+  if (!panels) {
+    return;
+  }
+  for (const view of CENTER_VIEWS) {
+    void panels[view].setEnabled(state.enabled);
+    void panels[view].setChecked(state.enabled && state.open[view]);
+  }
+}
 
 export function syncFileMenu(state: {
   canReopen: boolean;
@@ -78,6 +106,9 @@ async function createFileMenu(): Promise<void> {
     enabled: false,
     action: () => run(revealActiveRepo),
   });
+  const historyPanel = await panelItem("show-history", "Historial", "history");
+  const editorPanel = await panelItem("show-editor", "Editor", "editor");
+  const browserPanel = await panelItem("show-browser", "Browser", "browser");
 
   const file = await Submenu.new({
     text: "File",
@@ -134,19 +165,51 @@ async function createFileMenu(): Promise<void> {
       insertAt = index;
       await menu.remove(item);
     }
-    if (text === "Window" && item instanceof Submenu) {
+    if ((text === "Window" || text === "Ventana") && item instanceof Submenu) {
       for (const child of await item.items()) {
         const label = await child.text();
         if (label === "Close Window" || label === "Cerrar ventana") {
           await item.remove(child);
         }
       }
+      await item.append([
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        historyPanel,
+        editorPanel,
+        browserPanel,
+      ]);
     }
   }
   await menu.insert(file, insertAt);
   const previous = await menu.setAsAppMenu();
   toggles = { reopen, editor, terminal, finder };
+  panels = {
+    history: historyPanel,
+    editor: editorPanel,
+    browser: browserPanel,
+  };
+  syncWindowPanels(panelState);
   await previous?.close();
+}
+
+function panelItem(
+  id: string,
+  text: string,
+  view: CenterView,
+): Promise<CheckMenuItem> {
+  return CheckMenuItem.new({
+    id,
+    text,
+    checked: true,
+    enabled: false,
+    action: () => {
+      const item = panels?.[view];
+      if (item) {
+        void item.setChecked(true);
+      }
+      run(() => showCenterView(view));
+    },
+  });
 }
 
 function run(action: () => void | Promise<void>): void {

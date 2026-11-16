@@ -3,8 +3,11 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   CloudDownload,
+  FileCode2,
   FolderGit2,
   GitBranch,
+  Globe,
+  History,
   Plus,
   Redo2,
   Settings,
@@ -301,16 +304,26 @@ function PreviewHistory({ tokens }: { tokens: AppearanceTokens }) {
         <button
           type="button"
           tabIndex={-1}
-          className="rounded bg-surface-overlay px-2 py-1 text-xs text-text"
+          className="flex items-center gap-1.5 rounded bg-surface-overlay px-2 py-1 text-xs text-text"
         >
+          <History size={13} />
           Historial
         </button>
         <button
           type="button"
           tabIndex={-1}
-          className="rounded px-2 py-1 text-xs text-muted"
+          className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted"
         >
+          <FileCode2 size={13} />
           Editor
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted"
+        >
+          <Globe size={13} />
+          Browser
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">

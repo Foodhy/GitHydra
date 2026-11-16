@@ -13,6 +13,10 @@ import {
   readExternalApps,
   saveExternalApps,
 } from "../../lib/external-apps";
+import {
+  layoutStorageFrom,
+  resetWorkspaceLayout,
+} from "../workspace/layout-reset.ts";
 import { AppThemePreview } from "./AppThemePreview";
 import { McpAccess } from "./McpAccess";
 
@@ -27,6 +31,7 @@ export function SettingsPage() {
   });
   const [appsSaved, setAppsSaved] = useState(false);
   const [appsError, setAppsError] = useState<string | null>(null);
+  const [layoutReset, setLayoutReset] = useState(false);
   const draft = styleById(styleId);
   const preview = tokensFor(styleId, accent);
 
@@ -229,6 +234,31 @@ export function SettingsPage() {
           {appsSaved ? (
             <p className="mt-2 text-xs text-muted">
               El menú File usará estos nombres.
+            </p>
+          ) : null}
+        </section>
+        <section className="mt-8">
+          <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
+            Disposición
+          </h2>
+          <p className="mt-2 text-sm text-muted">
+            Cada repositorio vuelve a ramas, historial y cambios, con la
+            terminal abajo. Las disposiciones guardadas junto a Ajustes se
+            conservan.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              resetWorkspaceLayout(layoutStorageFrom(localStorage));
+              setLayoutReset(true);
+            }}
+            className="mt-4 rounded border border-line px-4 py-2 text-sm"
+          >
+            Reiniciar posiciones
+          </button>
+          {layoutReset ? (
+            <p className="mt-2 text-xs text-muted">
+              Listo. Al abrir un repositorio quedan en su sitio.
             </p>
           ) : null}
         </section>

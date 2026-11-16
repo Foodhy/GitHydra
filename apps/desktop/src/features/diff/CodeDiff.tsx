@@ -20,6 +20,7 @@ export function CodeDiff({
   const options = useMemo(
     () => ({
       readOnly: true,
+      contextmenu: false,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       fontSize: 12,

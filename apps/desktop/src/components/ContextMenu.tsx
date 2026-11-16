@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useOverlay } from "../stores/overlay";
 
 export interface MenuItem {
   id: string;
@@ -20,6 +21,11 @@ export function ContextMenu({
   items: MenuItem[];
   onClose: () => void;
 }) {
+  useEffect(() => {
+    useOverlay.getState().push();
+    return () => useOverlay.getState().pop();
+  }, []);
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {

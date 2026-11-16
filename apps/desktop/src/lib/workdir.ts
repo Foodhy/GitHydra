@@ -40,3 +40,31 @@ export function writeWorkdirFile(
 export function searchWorkdir(path: string, query: string): Promise<string[]> {
   return invoke<string[]>("search_workdir", { path, query });
 }
+
+export function createWorkdirFile(
+  path: string,
+  directory: string,
+  name: string,
+): Promise<string> {
+  return invoke<string>("create_workdir_file", { path, directory, name });
+}
+
+export function createWorkdirDir(
+  path: string,
+  directory: string,
+  name: string,
+): Promise<string> {
+  return invoke<string>("create_workdir_dir", { path, directory, name });
+}
+
+export function renameWorkdir(
+  path: string,
+  file: string,
+  name: string,
+): Promise<string> {
+  return invoke<string>("rename_workdir", { path, file, name });
+}
+
+export function removeWorkdir(path: string, file: string): Promise<void> {
+  return invoke<void>("remove_workdir", { path, file });
+}

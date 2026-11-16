@@ -1,9 +1,12 @@
 import type {
   BranchRef,
+  CommitAuthor,
   CommitDiff,
+  CommitMessageDraft,
   CommitPage,
   GitPort,
   RepositoryInfo,
+  StashEntry,
   WorkDiff,
   WorkingTreeStatus,
 } from "@githydra/contracts";
@@ -34,8 +37,23 @@ export const tauriGit: GitPort = {
   unstagePaths(path, paths) {
     return invoke<void>("unstage_paths", { path, paths });
   },
-  createCommit(path, summary, description) {
-    return invoke<void>("create_commit", { path, summary, description });
+  discardPaths(path, paths) {
+    return invoke<void>("discard_paths", { path, paths });
+  },
+  createCommit(path, summary, description, authorName, authorEmail) {
+    return invoke<void>("create_commit", {
+      path,
+      summary,
+      description,
+      authorName,
+      authorEmail,
+    });
+  },
+  listCommitAuthors(path) {
+    return invoke<CommitAuthor[]>("list_commit_authors", { path });
+  },
+  generateCommitMessage(path) {
+    return invoke<CommitMessageDraft>("generate_commit_message", { path });
   },
   checkoutBranch(path, name) {
     return invoke<void>("checkout_branch", { path, name });
@@ -78,5 +96,20 @@ export const tauriGit: GitPort = {
   },
   readCommitFile(path, sha, file) {
     return invoke<string>("read_commit_file", { path, sha, file });
+  },
+  listStashes(path) {
+    return invoke<StashEntry[]>("list_stashes", { path });
+  },
+  saveStash(path, message, includeUntracked) {
+    return invoke<void>("save_stash", { path, message, includeUntracked });
+  },
+  applyStash(path, index) {
+    return invoke<void>("apply_stash", { path, index });
+  },
+  popStash(path, index) {
+    return invoke<void>("pop_stash", { path, index });
+  },
+  dropStash(path, index) {
+    return invoke<void>("drop_stash", { path, index });
   },
 };

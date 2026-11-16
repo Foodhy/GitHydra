@@ -6,6 +6,7 @@ import { useBranches } from "../../hooks/useBranches";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { type OperationKind, runOperation } from "../../lib/run-operation";
 import { useOperation } from "../../stores/operation";
+import { ActivityFooter } from "./ActivityFooter";
 
 export function BranchPanel({
   path,
@@ -186,6 +187,7 @@ export function BranchPanel({
           </p>
         ) : null}
       </div>
+      <ActivityFooter />
       {menu ? (
         <ContextMenu
           x={menu.x}

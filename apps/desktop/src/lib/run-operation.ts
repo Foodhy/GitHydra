@@ -5,11 +5,28 @@ import { type OperationKind, useOperation } from "../stores/operation";
 
 export type { OperationKind };
 
+import { holdRemaining } from "./activity-hold";
 import { toGitClientError } from "./git/errors";
 
 const NETWORK = new Set<OperationKind>(["fetch", "pull", "push", "clone"]);
 
 let suppressUntil = 0;
+let presentation = 0;
+
+function showDock(kind: OperationKind | null): void {
+  void invoke("set_dock_activity", { kind }).catch(() => undefined);
+}
+
+function scheduleRelease(token: number, startedAt: number): void {
+  const wait = holdRemaining(startedAt, Date.now());
+  setTimeout(() => {
+    if (token !== presentation || useOperation.getState().running) {
+      return;
+    }
+    useOperation.getState().release();
+    showDock(null);
+  }, wait);
+}
 
 export function externalRefreshAllowed(): boolean {
   return Date.now() > suppressUntil && !useOperation.getState().running;
@@ -32,7 +49,11 @@ export async function runOperation(
   if (useOperation.getState().running) {
     return;
   }
+  presentation += 1;
+  const token = presentation;
+  const startedAt = Date.now();
   useOperation.getState().start(kind, label);
+  showDock(kind);
   try {
     await action();
   } catch (reason: unknown) {
@@ -42,10 +63,12 @@ export async function runOperation(
     } else {
       useOperation.getState().fail(message);
     }
+    scheduleRelease(token, startedAt);
     return;
   }
   useOperation.getState().succeed();
   suppressUntil = Date.now() + 500;
+  scheduleRelease(token, startedAt);
   try {
     await refresh();
   } catch (reason: unknown) {

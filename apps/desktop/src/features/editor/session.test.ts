@@ -3,6 +3,7 @@ import {
   applyText,
   classifyCommitText,
   closeTab,
+  closeWorkPath,
   confirmDiscard,
   emptySession,
   isDirty,
@@ -10,6 +11,7 @@ import {
   refreshIfClean,
   requestClose,
   requestOpen,
+  retargetWorkPath,
 } from "./session.ts";
 
 const session = emptySession();
@@ -87,3 +89,25 @@ const binary = classifyCommitText("Archivo binario, sin vista de texto.");
 assert.equal(binary.binary, true);
 const missing = classifyCommitText("El commit no tiene notas.txt");
 assert.equal(missing.error, "El commit no tiene notas.txt");
+
+const nested = requestOpen(
+  requestOpen(opened, "docs/guia.md", null),
+  "docs/extra.md",
+  null,
+);
+const moved = retargetWorkPath(nested, "docs", "notas");
+assert.equal(
+  moved.tabs.some((tab) => tab.path === "notas/guia.md"),
+  true,
+);
+assert.equal(
+  moved.tabs.some((tab) => tab.path === "notas/extra.md"),
+  true,
+);
+assert.equal(
+  moved.tabs.some((tab) => tab.id === "work:src/app.ts"),
+  true,
+);
+const cleared = closeWorkPath(moved, "notas");
+assert.equal(cleared.tabs.length, 1);
+assert.equal(cleared.tabs[0]?.path, "src/app.ts");

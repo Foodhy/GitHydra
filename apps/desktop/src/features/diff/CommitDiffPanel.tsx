@@ -1,4 +1,5 @@
 import type { CommitDiff, CommitDiffFile } from "@githydra/contracts";
+import { ListTree, Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
@@ -64,11 +65,17 @@ export function CommitDiffPanel({
                 onEdit(selected);
               }
             }}
-            className="text-accent disabled:text-muted"
+            className="flex items-center gap-1 text-accent disabled:text-muted"
           >
+            <Pencil size={12} />
             Editar
           </button>
-          <button type="button" onClick={onClear} className="text-accent">
+          <button
+            type="button"
+            onClick={onClear}
+            className="flex items-center gap-1 text-accent"
+          >
+            <ListTree size={12} />
             Ver cambios
           </button>
         </span>

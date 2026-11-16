@@ -22,7 +22,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { readWorkdirFile, writeWorkdirFile } from "../../lib/workdir";
-import { Explorer } from "./Explorer";
+import { Explorer, type WorkdirChange } from "./Explorer";
 import { FileGlyph } from "./FileGlyph";
 import {
   eolOf,
@@ -40,6 +40,7 @@ import {
   cancelClose,
   classifyCommitText,
   closeTab,
+  closeWorkPath,
   confirmDiscard,
   type EditorBuffer,
   type EditorSession,
@@ -54,6 +55,7 @@ import {
   rememberSession,
   requestClose,
   requestOpen,
+  retargetWorkPath,
   setBufferError,
   tabLabel,
 } from "./session";
@@ -270,6 +272,20 @@ export function EditorPanel({
     setSession((current) => requestOpen(current, filePath, null));
   }
 
+  const handleTreeChange = useCallback(
+    (change: WorkdirChange) => {
+      if (change.kind === "rename") {
+        setSession((current) =>
+          retargetWorkPath(current, change.from, change.to),
+        );
+      } else if (change.kind === "remove") {
+        setSession((current) => closeWorkPath(current, change.path));
+      }
+      void onRepositoryChanged().catch(() => undefined);
+    },
+    [onRepositoryChanged],
+  );
+
   function runAction(action: string) {
     editorRef.current?.focus();
     editorRef.current?.trigger("githydra", action, null);
@@ -318,6 +334,7 @@ export function EditorPanel({
             revision={revision}
             activePath={tab?.path ?? null}
             onOpen={openWork}
+            onChange={handleTreeChange}
           />
         </Panel>
         <PanelResizeHandle className="w-px bg-line" />

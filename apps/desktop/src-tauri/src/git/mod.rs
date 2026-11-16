@@ -4,12 +4,12 @@ pub mod files;
 
 use chrono::{DateTime, FixedOffset};
 pub use error::GitError;
-use git2::{BranchType, Delta, DiffOptions, Repository, Sort, Status, StatusOptions};
+use git2::{BranchType, Delta, DiffOptions, Repository, Sort, StashFlags, Status, StatusOptions};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -171,6 +171,22 @@ pub struct WorkDiff {
 }
 
 const PATCH_BYTE_LIMIT: usize = 200 * 1024;
+const PROMPT_FILE_CHARS: usize = 8_000;
+const PROMPT_TOTAL_CHARS: usize = 24_000;
+const RECENT_SUBJECT_LIMIT: usize = 15;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitMessageDraft {
+    pub summary: String,
+    pub description: String,
+}
+
+#[derive(Debug)]
+pub struct StagedCommitPrompt {
+    pub root: String,
+    pub prompt: String,
+}
 
 pub fn open_repository(path: &str) -> Result<RepositoryInfo, GitError> {
     let repo = discover(path)?;
@@ -383,7 +399,363 @@ pub fn unstage_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> 
     }
 }
 
-pub fn create_commit(repo_path: &str, summary: &str, description: &str) -> Result<(), GitError> {
+pub fn discard_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let repo = discover(repo_path)?;
+    let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+    let mut restore = Vec::new();
+    let mut remove = Vec::new();
+    for file in paths {
+        let relative = repo_relative(file)?;
+        let in_head = head_tree
+            .as_ref()
+            .and_then(|tree| tree.get_path(relative).ok())
+            .is_some();
+        if in_head {
+            restore.push(relative.to_path_buf());
+        } else {
+            remove.push(relative.to_path_buf());
+        }
+    }
+    if !restore.is_empty() {
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force().update_index(true);
+        for path in &restore {
+            checkout.path(path);
+        }
+        repo.checkout_head(Some(&mut checkout)).map_err(map_git)?;
+    }
+    if remove.is_empty() {
+        return Ok(());
+    }
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Io("El repositorio no tiene directorio de trabajo".into()))?;
+    let root = workdir
+        .canonicalize()
+        .map_err(|err| GitError::Io(err.to_string()))?;
+    let mut index = repo.index().map_err(map_git)?;
+    for relative in &remove {
+        if let Err(err) = index.remove_path(relative)
+            && err.code() != git2::ErrorCode::NotFound
+        {
+            return Err(map_git(err));
+        }
+        let full = workdir.join(relative);
+        let Some(parent) = full.parent() else {
+            continue;
+        };
+        let Ok(parent) = parent.canonicalize() else {
+            continue;
+        };
+        if !parent.starts_with(&root) {
+            return Err(GitError::Io(
+                "La ruta tiene que quedar dentro del repositorio".into(),
+            ));
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&full) else {
+            continue;
+        };
+        if meta.is_file() || meta.file_type().is_symlink() {
+            std::fs::remove_file(&full).map_err(|err| GitError::Io(err.to_string()))?;
+        }
+    }
+    index.write().map_err(map_git)
+}
+
+fn repo_relative(file: &str) -> Result<&Path, GitError> {
+    let file = file.trim();
+    let path = Path::new(file);
+    let inside = !file.is_empty()
+        && !file.contains('\0')
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)));
+    if !inside {
+        return Err(GitError::Io(
+            "La ruta tiene que quedar dentro del repositorio".into(),
+        ));
+    }
+    Ok(path)
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitAuthor {
+    pub name: String,
+    pub email: String,
+    pub detail: String,
+    pub current: bool,
+}
+
+pub fn list_commit_authors(path: &str) -> Result<Vec<CommitAuthor>, GitError> {
+    let repo = discover(path)?;
+    let config = repo.config().map_err(map_git)?;
+    let current_name = config.get_string("user.name").unwrap_or_default();
+    let current_email = config.get_string("user.email").unwrap_or_default();
+    let mut configs = Vec::new();
+    let mut seen = HashSet::new();
+    if let Ok(global) = git2::Config::find_global() {
+        read_config_tree(&global, &mut configs, &mut seen, 0);
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut keys = Vec::new();
+    if !home.is_empty() {
+        let ssh = PathBuf::from(&home).join(".ssh");
+        if let Ok(entries) = std::fs::read_dir(&ssh) {
+            let mut pubs: Vec<_> = entries.filter_map(Result::ok).collect();
+            pubs.sort_by_key(|entry| entry.file_name());
+            for entry in pubs {
+                let file = entry.path();
+                if file.extension().and_then(|value| value.to_str()) != Some("pub") {
+                    continue;
+                }
+                let Some(name) = file.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                let Ok(text) = std::fs::read_to_string(&file) else {
+                    continue;
+                };
+                let line = text.lines().next().unwrap_or("");
+                keys.push((name.to_string(), line.to_string()));
+            }
+        }
+    }
+    let config_refs: Vec<(&str, &str)> = configs
+        .iter()
+        .map(|(detail, text)| (detail.as_str(), text.as_str()))
+        .collect();
+    let key_refs: Vec<(&str, &str)> = keys
+        .iter()
+        .map(|(name, line)| (name.as_str(), line.as_str()))
+        .collect();
+    Ok(collect_commit_authors(
+        &current_name,
+        &current_email,
+        &config_refs,
+        &key_refs,
+    ))
+}
+
+pub fn collect_commit_authors(
+    current_name: &str,
+    current_email: &str,
+    configs: &[(&str, &str)],
+    keys: &[(&str, &str)],
+) -> Vec<CommitAuthor> {
+    let mut seen = HashSet::new();
+    let mut authors = Vec::new();
+    let current_name = current_name.trim();
+    let current_email = current_email.trim();
+    if !current_name.is_empty() && !current_email.is_empty() {
+        seen.insert(current_email.to_ascii_lowercase());
+        authors.push(CommitAuthor {
+            name: current_name.to_string(),
+            email: current_email.to_string(),
+            detail: "este repo".into(),
+            current: true,
+        });
+    }
+    for (detail, text) in configs {
+        for (name, email) in parse_gitconfig_users(text) {
+            if !seen.insert(email.to_ascii_lowercase()) {
+                continue;
+            }
+            authors.push(CommitAuthor {
+                name,
+                email,
+                detail: (*detail).to_string(),
+                current: false,
+            });
+        }
+    }
+    for (file, line) in keys {
+        let Some((name, email)) = author_from_pubkey(line) else {
+            continue;
+        };
+        if !seen.insert(email.to_ascii_lowercase()) {
+            continue;
+        }
+        authors.push(CommitAuthor {
+            name,
+            email,
+            detail: (*file).to_string(),
+            current: false,
+        });
+    }
+    authors
+}
+
+pub fn parse_gitconfig_includes(text: &str) -> Vec<String> {
+    let mut section = String::new();
+    let mut paths = Vec::new();
+    for raw in text.lines() {
+        let line = strip_config_comment(raw.trim());
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(next) = section_name(line) {
+            section = next;
+            continue;
+        }
+        if section != "include" && section != "includeif" {
+            continue;
+        }
+        if let Some((key, value)) = split_assign(line)
+            && key == "path"
+            && !value.is_empty()
+        {
+            paths.push(value);
+        }
+    }
+    paths
+}
+
+fn parse_gitconfig_users(text: &str) -> Vec<(String, String)> {
+    let mut section = String::new();
+    let mut name = None;
+    let mut email = None;
+    let mut users = Vec::new();
+    for raw in text.lines() {
+        let line = strip_config_comment(raw.trim());
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(next) = section_name(line) {
+            push_user(&mut name, &mut email, &mut users);
+            section = next;
+            continue;
+        }
+        if section != "user" {
+            continue;
+        }
+        if let Some((key, value)) = split_assign(line) {
+            match key {
+                "name" => name = Some(value),
+                "email" => email = Some(value),
+                _ => {}
+            }
+        }
+    }
+    push_user(&mut name, &mut email, &mut users);
+    users
+}
+
+fn push_user(
+    name: &mut Option<String>,
+    email: &mut Option<String>,
+    users: &mut Vec<(String, String)>,
+) {
+    match (name.take(), email.take()) {
+        (Some(name), Some(email)) if !name.is_empty() && !email.is_empty() => {
+            users.push((name, email));
+        }
+        _ => {}
+    }
+}
+
+fn section_name(line: &str) -> Option<String> {
+    let line = line.trim();
+    if !line.starts_with('[') || !line.ends_with(']') {
+        return None;
+    }
+    let inner = &line[1..line.len() - 1];
+    let name = inner
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches('"');
+    Some(name.to_ascii_lowercase())
+}
+
+fn split_assign(line: &str) -> Option<(&str, String)> {
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    if key.is_empty() || key.contains(char::is_whitespace) {
+        return None;
+    }
+    Some((key, unquote(value.trim())))
+}
+
+fn unquote(value: &str) -> String {
+    let value = value.trim();
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        return value[1..value.len() - 1].to_string();
+    }
+    value.to_string()
+}
+
+fn strip_config_comment(line: &str) -> &str {
+    if line.starts_with('#') || line.starts_with(';') {
+        return "";
+    }
+    line
+}
+
+fn author_from_pubkey(line: &str) -> Option<(String, String)> {
+    let comment = line.split_whitespace().last()?.trim();
+    let (local, domain) = comment.split_once('@')?;
+    if local.is_empty() || domain.is_empty() || domain.contains('@') {
+        return None;
+    }
+    Some((local.to_string(), comment.to_string()))
+}
+
+fn read_config_tree(
+    path: &Path,
+    configs: &mut Vec<(String, String)>,
+    seen: &mut HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(canonical) = path.canonicalize() else {
+        return;
+    };
+    if !seen.insert(canonical.clone()) {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(&canonical) else {
+        return;
+    };
+    configs.push((canonical.display().to_string(), text.clone()));
+    let home = std::env::var("HOME").unwrap_or_default();
+    let parent = canonical.parent().unwrap_or(Path::new(""));
+    for include in parse_gitconfig_includes(&text) {
+        let next = expand_config_path(&include, parent, &home);
+        read_config_tree(&next, configs, seen, depth + 1);
+    }
+}
+
+pub fn expand_config_path(raw: &str, base: &Path, home: &str) -> PathBuf {
+    if raw == "~" {
+        return PathBuf::from(home);
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return PathBuf::from(home).join(rest);
+    }
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+pub fn create_commit(
+    repo_path: &str,
+    summary: &str,
+    description: &str,
+    author_name: &str,
+    author_email: &str,
+) -> Result<(), GitError> {
     let summary = summary.trim();
     if summary.is_empty() {
         return Err(GitError::Io("El resumen del commit está vacío".into()));
@@ -392,9 +764,7 @@ pub fn create_commit(repo_path: &str, summary: &str, description: &str) -> Resul
     if !index_has_changes(&repo)? {
         return Err(GitError::Io("No hay cambios en stage".into()));
     }
-    let signature = repo.signature().map_err(|_| {
-        GitError::Io("Falta user.name o user.email en la configuración de git".into())
-    })?;
+    let signature = commit_signature(&repo, author_name, author_email)?;
     let mut index = repo.index().map_err(map_git)?;
     let tree_id = index.write_tree().map_err(map_git)?;
     let tree = repo.find_tree(tree_id).map_err(map_git)?;
@@ -416,6 +786,112 @@ pub fn create_commit(repo_path: &str, summary: &str, description: &str) -> Resul
     )
     .map_err(map_git)?;
     Ok(())
+}
+
+fn commit_signature(
+    repo: &Repository,
+    author_name: &str,
+    author_email: &str,
+) -> Result<git2::Signature<'static>, GitError> {
+    if author_name.contains(['\n', '\r']) || author_email.contains(['\n', '\r']) {
+        return Err(GitError::Io("El autor del commit no es válido".into()));
+    }
+    let name = author_name.trim();
+    let email = author_email.trim();
+    if name.is_empty() && email.is_empty() {
+        return repo.signature().map_err(|_| {
+            GitError::Io("Falta user.name o user.email en la configuración de git".into())
+        });
+    }
+    if name.is_empty() || email.is_empty() {
+        return Err(GitError::Io("El autor del commit no es válido".into()));
+    }
+    git2::Signature::now(name, email).map_err(map_git)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    pub index: u32,
+    pub message: String,
+    pub branch: Option<String>,
+    pub stashed_at: String,
+}
+
+pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, GitError> {
+    let mut repo = discover(repo_path)?;
+    let mut found = Vec::new();
+    repo.stash_foreach(|index, message, oid| {
+        found.push((index, message.to_string(), *oid));
+        true
+    })
+    .map_err(map_git)?;
+    let mut entries = Vec::with_capacity(found.len());
+    for (index, message, oid) in found {
+        let stashed_at = repo
+            .find_commit(oid)
+            .ok()
+            .map(|commit| format_time(commit.time()))
+            .unwrap_or_default();
+        entries.push(StashEntry {
+            index: index as u32,
+            branch: stash_branch(&message),
+            message,
+            stashed_at,
+        });
+    }
+    Ok(entries)
+}
+
+pub fn save_stash(repo_path: &str, message: &str, include_untracked: bool) -> Result<(), GitError> {
+    let mut repo = discover(repo_path)?;
+    let signature = repo.signature().map_err(|_| {
+        GitError::Io("Falta user.name o user.email en la configuración de git".into())
+    })?;
+    let mut flags = StashFlags::empty();
+    if include_untracked {
+        flags.insert(StashFlags::INCLUDE_UNTRACKED);
+    }
+    let message = message.trim();
+    let message = if message.is_empty() {
+        None
+    } else {
+        Some(message)
+    };
+    repo.stash_save2(&signature, message, Some(flags))
+        .map_err(map_git)?;
+    Ok(())
+}
+
+pub fn apply_stash(repo_path: &str, index: u32) -> Result<(), GitError> {
+    let mut repo = discover(repo_path)?;
+    let mut options = git2::StashApplyOptions::new();
+    repo.stash_apply(index as usize, Some(&mut options))
+        .map_err(map_git)
+}
+
+pub fn pop_stash(repo_path: &str, index: u32) -> Result<(), GitError> {
+    let mut repo = discover(repo_path)?;
+    let mut options = git2::StashApplyOptions::new();
+    repo.stash_pop(index as usize, Some(&mut options))
+        .map_err(map_git)
+}
+
+pub fn drop_stash(repo_path: &str, index: u32) -> Result<(), GitError> {
+    let mut repo = discover(repo_path)?;
+    repo.stash_drop(index as usize).map_err(map_git)
+}
+
+fn stash_branch(message: &str) -> Option<String> {
+    let rest = message
+        .strip_prefix("WIP on ")
+        .or_else(|| message.strip_prefix("On "))?;
+    let branch = rest.split(':').next()?.trim();
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    }
 }
 
 pub fn checkout_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
@@ -1231,6 +1707,211 @@ fn index_kind(status: Status) -> Option<&'static str> {
     None
 }
 
+pub fn staged_commit_prompt(path: &str) -> Result<StagedCommitPrompt, GitError> {
+    let repo = discover(path)?;
+    let root = repo_root(&repo)?;
+    let diff = staged_prompt_diff(&repo)?;
+    let subjects = recent_subjects(&repo, RECENT_SUBJECT_LIMIT)?;
+    Ok(StagedCommitPrompt {
+        root: root.to_string_lossy().into_owned(),
+        prompt: commit_message_prompt(&subjects, &diff),
+    })
+}
+
+pub fn clean_commit_reply(text: &str) -> Result<CommitMessageDraft, GitError> {
+    let fenced = strip_fences(text.trim());
+    let unquoted = strip_wrapping_quotes(&fenced);
+    let mut lines: Vec<&str> = unquoted.lines().map(str::trim_end).collect();
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    let Some(first) = lines.first() else {
+        return Err(GitError::Io("El agente no devolvió un mensaje.".into()));
+    };
+    let summary = strip_wrapping_quotes(strip_reply_label(first.trim()))
+        .trim()
+        .to_string();
+    if summary.is_empty() {
+        return Err(GitError::Io("El agente no devolvió un mensaje.".into()));
+    }
+    let mut body = lines[1..].to_vec();
+    while body.first().is_some_and(|line| line.trim().is_empty()) {
+        body.remove(0);
+    }
+    Ok(CommitMessageDraft {
+        summary,
+        description: body.join("\n").trim().to_string(),
+    })
+}
+
+fn commit_message_prompt(subjects: &[String], diff: &str) -> String {
+    let history = if subjects.is_empty() {
+        "(sin commits anteriores)".to_string()
+    } else {
+        subjects
+            .iter()
+            .map(|subject| format!("- {subject}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "Escribe el mensaje de git para este diff en stage.\n\
+Copia el idioma y la forma de los asuntos recientes.\n\
+Una sola línea de asunto, de menos de 72 caracteres.\n\
+Añade un cuerpo corto, separado por una línea en blanco, solo si el porqué no se ve en el diff.\n\
+Responde solo con el mensaje, sin comillas, sin fences y sin explicación.\n\
+\n\
+Asuntos recientes:\n\
+{history}\n\
+\n\
+Diff en stage:\n\
+{diff}"
+    )
+}
+
+fn staged_prompt_diff(repo: &Repository) -> Result<String, GitError> {
+    let parent = head_commit(repo)?;
+    let tree = match &parent {
+        Some(commit) => Some(commit.tree().map_err(map_git)?),
+        None => None,
+    };
+    let index = repo.index().map_err(map_git)?;
+    let mut options = DiffOptions::new();
+    options.context_lines(3);
+    let diff = repo
+        .diff_tree_to_index(tree.as_ref(), Some(&index), Some(&mut options))
+        .map_err(map_git)?;
+    if diff.deltas().len() == 0 {
+        return Err(GitError::Io(
+            "No hay cambios en stage. Pasa archivos a stage antes de generar el mensaje.".into(),
+        ));
+    }
+
+    let mut included = String::new();
+    let mut used = 0usize;
+    let mut skipped = Vec::new();
+    for index in 0..diff.deltas().len() {
+        let (file_path, old_path, kind, binary) = delta_meta(&diff, index)?;
+        let label = match old_path {
+            Some(old) => format!("{kind} {old} -> {file_path}"),
+            None => format!("{kind} {file_path}"),
+        };
+        let raw = patch_text(&diff, index);
+        if is_prompt_noise(&file_path) || binary || raw.starts_with("Archivo binario") {
+            skipped.push(label);
+            continue;
+        }
+        if used >= PROMPT_TOTAL_CHARS {
+            skipped.push(label);
+            continue;
+        }
+        let room = (PROMPT_TOTAL_CHARS - used).min(PROMPT_FILE_CHARS);
+        let chars = raw.chars().count();
+        if chars > room {
+            let mut cut: String = raw.chars().take(room).collect();
+            cut.push_str("\n...[truncado]\n");
+            used += cut.chars().count();
+            included.push_str(&cut);
+        } else {
+            included.push_str(&raw);
+            if !raw.ends_with('\n') {
+                included.push('\n');
+            }
+            used += chars;
+        }
+    }
+    if !skipped.is_empty() {
+        included.push_str("\nArchivos sin parche de texto:\n");
+        for item in skipped {
+            included.push_str("- ");
+            included.push_str(&item);
+            included.push('\n');
+        }
+    }
+    Ok(included)
+}
+
+fn is_prompt_noise(path: &str) -> bool {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path);
+    let lower = name.to_ascii_lowercase();
+    lower == "pnpm-lock.yaml" || lower == "package-lock.json" || lower.ends_with(".lock")
+}
+
+fn recent_subjects(repo: &Repository, limit: usize) -> Result<Vec<String>, GitError> {
+    let mut walk = repo.revwalk().map_err(map_git)?;
+    if let Err(err) = walk.push_head() {
+        if err.code() == git2::ErrorCode::UnbornBranch || err.code() == git2::ErrorCode::NotFound {
+            return Ok(Vec::new());
+        }
+        return Err(map_git(err));
+    }
+    walk.set_sorting(Sort::TIME).map_err(map_git)?;
+    let mut subjects = Vec::new();
+    for oid in walk {
+        if subjects.len() == limit {
+            break;
+        }
+        let commit = repo.find_commit(oid.map_err(map_git)?).map_err(map_git)?;
+        let subject = commit.summary().unwrap_or("").trim();
+        if !subject.is_empty() {
+            subjects.push(subject.to_string());
+        }
+    }
+    Ok(subjects)
+}
+
+fn strip_fences(text: &str) -> String {
+    let trimmed = text.trim();
+    if !trimmed.starts_with("```") {
+        return trimmed.to_string();
+    }
+    let mut lines: Vec<&str> = trimmed.lines().collect();
+    if lines
+        .first()
+        .is_some_and(|line| line.trim_start().starts_with("```"))
+    {
+        lines.remove(0);
+    }
+    if lines
+        .last()
+        .is_some_and(|line| line.trim().starts_with("```"))
+    {
+        lines.pop();
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn strip_wrapping_quotes(text: &str) -> &str {
+    let trimmed = text.trim();
+    let mut chars = trimmed.chars();
+    let Some(open) = chars.next() else {
+        return trimmed;
+    };
+    let Some(close) = chars.next_back() else {
+        return trimmed;
+    };
+    if (open == '"' && close == '"') || (open == '\'' && close == '\'') {
+        return trimmed[open.len_utf8()..trimmed.len() - close.len_utf8()].trim();
+    }
+    trimmed
+}
+
+fn strip_reply_label(line: &str) -> &str {
+    let trimmed = line.trim();
+    for label in ["commit:", "mensaje:", "message:"] {
+        if trimmed.len() >= label.len() && trimmed[..label.len()].eq_ignore_ascii_case(label) {
+            return trimmed[label.len()..].trim();
+        }
+    }
+    trimmed
+}
+
 fn worktree_kind(status: Status) -> Option<&'static str> {
     if status.is_conflicted() {
         return Some("conflicted");
@@ -1356,6 +2037,21 @@ mod tests {
             })
         );
 
+        discard_paths(&info.path, &["../fuera.txt".to_string()]).expect_err("ruta fuera");
+        fs::write(dir.0.join("README.md"), "cambiado\n").expect("edit");
+        discard_paths(
+            &info.path,
+            &["README.md".to_string(), "notes.txt".to_string()],
+        )
+        .expect("discard");
+        assert_eq!(
+            fs::read_to_string(dir.0.join("README.md")).expect("readme"),
+            "dos\n"
+        );
+        assert!(!dir.0.join("notes.txt").exists());
+        fs::write(dir.0.join("notes.txt"), "pendiente\n").expect("write again");
+        stage_paths(&info.path, &["notes.txt".to_string()]).expect("stage otra vez");
+
         unstage_paths(&info.path, &["notes.txt".to_string()]).expect("unstage");
         let unstaged = working_tree_status(&info.path).expect("unstaged");
         assert!(unstaged.entries.iter().any(|entry| {
@@ -1369,12 +2065,12 @@ mod tests {
             .expect("email");
 
         let before = open_repository(&info.path).expect("before").head_sha;
-        let empty = create_commit(&info.path, "vacío", "").expect_err("sin stage");
+        let empty = create_commit(&info.path, "vacío", "", "", "").expect_err("sin stage");
         assert_eq!(empty.code(), "IO_ERROR");
         assert_eq!(open_repository(&info.path).expect("same").head_sha, before);
 
         stage_paths(&info.path, &["notes.txt".to_string()]).expect("stage notes");
-        create_commit(&info.path, "Anota", "detalle").expect("commit");
+        create_commit(&info.path, "Anota", "detalle", "", "").expect("commit");
         let committed = list_commits(&info.path, 1, None).expect("committed");
         assert_eq!(committed.commits[0].message, "Anota\n\ndetalle");
         let clean = working_tree_status(&info.path).expect("clean");
@@ -1509,6 +2205,40 @@ mod tests {
     }
 
     #[test]
+    fn saves_lists_and_pops_a_stash() {
+        let dir = scratch_dir();
+        let repo = GitRepository::init(&dir.0).expect("init");
+        let mut config = repo.config().expect("config");
+        config.set_str("user.name", "Hydra").expect("name");
+        config
+            .set_str("user.email", "hydra@example.com")
+            .expect("email");
+        fs::write(dir.0.join("README.md"), "uno\n").expect("write");
+        commit_all(&repo, "first");
+        fs::write(dir.0.join("README.md"), "dos\n").expect("edit");
+
+        let path = dir.0.to_str().expect("utf8");
+        save_stash(path, "pausa", false).expect("save");
+        assert_eq!(
+            fs::read_to_string(dir.0.join("README.md")).expect("read"),
+            "uno\n"
+        );
+
+        let listed = list_stashes(path).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].message.contains("pausa"));
+        assert!(listed[0].branch.is_some());
+        assert!(!listed[0].stashed_at.is_empty());
+
+        pop_stash(path, listed[0].index).expect("pop");
+        assert_eq!(
+            fs::read_to_string(dir.0.join("README.md")).expect("back"),
+            "dos\n"
+        );
+        assert!(list_stashes(path).expect("empty").is_empty());
+    }
+
+    #[test]
     fn renames_sets_upstream_tags_and_checks_out_a_commit() {
         let dir = scratch_dir();
         let origin = dir.0.join("origin.git");
@@ -1587,5 +2317,141 @@ mod tests {
         assert_eq!(info.path, dir.0.canonicalize().unwrap().to_string_lossy());
         let again = init_repository(path).expect("already a repo");
         assert_eq!(again.path, info.path);
+    }
+
+    #[test]
+    fn builds_a_prompt_from_the_staged_diff_and_cleans_the_reply() {
+        let dir = scratch_dir();
+        let repo = GitRepository::init(&dir.0).expect("init");
+        fs::write(dir.0.join("README.md"), "uno\n").expect("write");
+        commit_all(&repo, "Estilo previo");
+        fs::write(dir.0.join("README.md"), "dos\n").expect("edit");
+        fs::write(dir.0.join("Cargo.lock"), "LOCKTOKEN-NO-DEBE-SALIR\n").expect("lock");
+        fs::write(
+            dir.0.join("huge.txt"),
+            format!("{}TAILTOKEN", "y".repeat(super::PROMPT_FILE_CHARS + 200)),
+        )
+        .expect("huge");
+        let path = dir.0.to_str().unwrap();
+        stage_paths(
+            path,
+            &[
+                "README.md".to_string(),
+                "Cargo.lock".to_string(),
+                "huge.txt".to_string(),
+            ],
+        )
+        .expect("stage");
+
+        let staged = staged_commit_prompt(path).expect("prompt");
+        assert!(staged.prompt.contains("Estilo previo"));
+        assert!(staged.prompt.contains("README.md"));
+        assert!(staged.prompt.contains("+dos"));
+        assert!(staged.prompt.contains("Cargo.lock"));
+        assert!(staged.prompt.contains("sin parche de texto"));
+        assert!(!staged.prompt.contains("LOCKTOKEN-NO-DEBE-SALIR"));
+        assert!(staged.prompt.contains("...[truncado]"));
+        assert!(!staged.prompt.contains("TAILTOKEN"));
+
+        let empty = scratch_dir();
+        let empty_repo = GitRepository::init(&empty.0).expect("init");
+        fs::write(empty.0.join("README.md"), "uno\n").expect("write");
+        commit_all(&empty_repo, "solo");
+        let missing = staged_commit_prompt(empty.0.to_str().unwrap()).expect_err("sin stage");
+        assert!(missing.to_string().contains("stage"));
+
+        let cleaned =
+            clean_commit_reply("```text\nCommit: \"Anota el cambio\"\n\nEl porqué va aquí.\n```")
+                .expect("clean");
+        assert_eq!(cleaned.summary, "Anota el cambio");
+        assert_eq!(cleaned.description, "El porqué va aquí.");
+
+        let quoted = clean_commit_reply("\"solo asunto\"").expect("quoted");
+        assert_eq!(quoted.summary, "solo asunto");
+        assert!(quoted.description.is_empty());
+        clean_commit_reply("   \n```\n```\n").expect_err("vacío");
+    }
+
+    #[test]
+    fn lists_the_current_author_and_the_other_identities() {
+        let global = "\
+[user]
+\tname = Global
+\temail = global@example.com
+[includeIf \"gitdir:/tmp/hina/\"]
+\tpath = ~/.gitconfig-hina
+";
+        let included = "\
+[user]
+\tname = Hina
+\temail = hina@example.com
+";
+        let authors = collect_commit_authors(
+            "Global",
+            "global@example.com",
+            &[
+                ("/home/me/.gitconfig", global),
+                ("/home/me/.gitconfig-hina", included),
+            ],
+            &[("id_ed25519.pub", "ssh-ed25519 AAAA work@example.com")],
+        );
+        assert_eq!(authors.len(), 3);
+        assert!(authors[0].current);
+        assert_eq!(authors[0].email, "global@example.com");
+        assert_eq!(authors[0].detail, "este repo");
+        assert!(authors.iter().any(|author| {
+            author.email == "hina@example.com" && author.detail.ends_with(".gitconfig-hina")
+        }));
+        assert!(authors.iter().any(|author| {
+            author.email == "work@example.com"
+                && author.name == "work"
+                && author.detail == "id_ed25519.pub"
+                && !author.current
+        }));
+
+        let includes = parse_gitconfig_includes(global);
+        assert_eq!(includes, vec!["~/.gitconfig-hina".to_string()]);
+        assert_eq!(
+            expand_config_path("~/.gitconfig-hina", Path::new("/home/me"), "/home/me"),
+            PathBuf::from("/home/me/.gitconfig-hina")
+        );
+
+        let duplicated = collect_commit_authors(
+            "Global",
+            "global@example.com",
+            &[("/home/me/.gitconfig", global)],
+            &[("id.pub", "ssh-ed25519 AAAA global@example.com")],
+        );
+        assert_eq!(
+            duplicated
+                .iter()
+                .filter(|author| author.email.eq_ignore_ascii_case("global@example.com"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn commits_with_the_chosen_author() {
+        let dir = scratch_dir();
+        let repo = GitRepository::init(&dir.0).expect("init");
+        let mut config = repo.config().expect("config");
+        config.set_str("user.name", "Hydra").expect("name");
+        config
+            .set_str("user.email", "hydra@example.com")
+            .expect("email");
+        fs::write(dir.0.join("README.md"), "uno\n").expect("write");
+        let path = dir.0.to_str().unwrap();
+        stage_paths(path, &["README.md".to_string()]).expect("stage");
+        create_commit(path, "Anota", "", "Otra", "otra@example.com").expect("commit");
+        let page = list_commits(path, 1, None).expect("log");
+        assert_eq!(page.commits[0].author_name, "Otra");
+        assert_eq!(page.commits[0].author_email, "otra@example.com");
+        assert_ne!(page.commits[0].author_email, "hydra@example.com");
+
+        fs::write(dir.0.join("README.md"), "dos\n").expect("edit");
+        stage_paths(path, &["README.md".to_string()]).expect("stage");
+        let invalid = create_commit(path, "Malo", "", "linea\n", "a@b.c").expect_err("autor");
+        assert_eq!(invalid.code(), "IO_ERROR");
     }
 }

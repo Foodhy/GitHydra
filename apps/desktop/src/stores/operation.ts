@@ -19,6 +19,7 @@ interface OperationStore {
   succeed: () => void;
   fail: (notice: string) => void;
   stopCancelled: () => void;
+  release: () => void;
 }
 
 export const useOperation = create<OperationStore>((set) => ({
@@ -40,9 +41,6 @@ export const useOperation = create<OperationStore>((set) => ({
   succeed: () =>
     set({
       running: false,
-      kind: null,
-      label: "",
-      detail: null,
       notice: null,
     }),
   fail: (notice) =>
@@ -61,6 +59,16 @@ export const useOperation = create<OperationStore>((set) => ({
       detail: null,
       notice: "Cancelado",
     }),
+  release: () =>
+    set((state) =>
+      state.running
+        ? {}
+        : {
+            kind: null,
+            label: "",
+            detail: null,
+          },
+    ),
 }));
 
 export function operationStatus(

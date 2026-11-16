@@ -22,12 +22,18 @@ import {
 } from "../../lib/run-operation";
 import { operationStatus, useOperation } from "../../stores/operation";
 import { useRepoSession } from "../../stores/repo-session";
+import { LayoutMenu } from "./LayoutMenu";
+import type { LayoutNode } from "./layout-tree";
 
 export function TopBar({
   path,
+  layout,
+  onApplyLayout,
   onRepositoryChanged,
 }: {
   path: string;
+  layout: LayoutNode;
+  onApplyLayout: (tree: LayoutNode) => void;
   onRepositoryChanged: () => Promise<void>;
 }) {
   const info = useRepoSession((state) => state.info);
@@ -125,6 +131,7 @@ export function TopBar({
           <SquareTerminal size={16} />
         </ToolButton>
       </div>
+      <LayoutMenu tree={layout} onApply={onApplyLayout} />
       <Link
         to="/settings"
         className="rounded-md p-1.5 text-muted hover:bg-surface-overlay hover:text-text"

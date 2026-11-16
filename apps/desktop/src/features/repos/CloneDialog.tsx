@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
 import { adoptRepository } from "../../lib/repo-actions";
 import {
@@ -9,6 +9,7 @@ import {
 } from "../../lib/run-operation";
 import { useCommandUi } from "../../stores/command-ui";
 import { useOperation } from "../../stores/operation";
+import { useOverlay } from "../../stores/overlay";
 
 export function CloneDialog() {
   const openDialog = useCommandUi((state) => state.cloneOpen);
@@ -18,6 +19,14 @@ export function CloneDialog() {
   const [busy, setBusy] = useState(false);
   const detail = useOperation((state) => state.detail);
   const kind = useOperation((state) => state.kind);
+
+  useEffect(() => {
+    if (!openDialog) {
+      return;
+    }
+    useOverlay.getState().push();
+    return () => useOverlay.getState().pop();
+  }, [openDialog]);
 
   if (!openDialog) {
     return null;

@@ -171,6 +171,92 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+pub fn create_workdir_file(
+    repo_path: &str,
+    directory: &str,
+    name: &str,
+) -> Result<String, GitError> {
+    create_entry(repo_path, directory, name, false)
+}
+
+pub fn create_workdir_dir(
+    repo_path: &str,
+    directory: &str,
+    name: &str,
+) -> Result<String, GitError> {
+    create_entry(repo_path, directory, name, true)
+}
+
+fn create_entry(
+    repo_path: &str,
+    directory: &str,
+    name: &str,
+    directory_entry: bool,
+) -> Result<String, GitError> {
+    let relative = child_relative(directory, name)?;
+    let root = workdir(repo_path)?;
+    let full = contained(&root, &relative, true)?;
+    reject_git(&root, &full)?;
+    if full.exists() {
+        return Err(GitError::Io("Ya existe un elemento con ese nombre".into()));
+    }
+    if directory_entry {
+        std::fs::create_dir(&full).map_err(io_message)?;
+    } else {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&full)
+            .map_err(io_message)?;
+    }
+    Ok(relative)
+}
+
+pub fn rename_workdir(repo_path: &str, file: &str, name: &str) -> Result<String, GitError> {
+    let name = entry_name(name)?;
+    let root = workdir(repo_path)?;
+    let relative = normalize_relative(file)?;
+    let full = contained(&root, &relative, false)?;
+    reject_git(&root, &full)?;
+    let parent = Path::new(&relative).parent().map(posix).unwrap_or_default();
+    let next = if parent.is_empty() {
+        name
+    } else {
+        format!("{parent}/{name}")
+    };
+    if next == relative {
+        return Ok(relative);
+    }
+    let dest = contained(&root, &next, true)?;
+    reject_git(&root, &dest)?;
+    if dest.exists() {
+        let same = dest.canonicalize().ok().as_ref() == Some(&full);
+        if !same {
+            return Err(GitError::Io("Ya existe un elemento con ese nombre".into()));
+        }
+    }
+    std::fs::rename(&full, &dest).map_err(io_message)?;
+    Ok(next)
+}
+
+pub fn remove_workdir(repo_path: &str, file: &str) -> Result<(), GitError> {
+    let root = workdir(repo_path)?;
+    let relative = normalize_relative(file)?;
+    let full = contained(&root, &relative, false)?;
+    reject_git(&root, &full)?;
+    if full == root {
+        return Err(GitError::Io(
+            "No se puede borrar la raíz del repositorio".into(),
+        ));
+    }
+    if full.is_dir() {
+        std::fs::remove_dir_all(&full).map_err(io_message)?;
+    } else {
+        std::fs::remove_file(&full).map_err(io_message)?;
+    }
+    Ok(())
+}
+
 pub fn write_workdir_file(repo_path: &str, file: &str, contents: &str) -> Result<(), GitError> {
     if contents.len() > FILE_BYTE_LIMIT {
         return Err(GitError::Io(
@@ -291,6 +377,31 @@ fn resolve_dir(root: &Path, directory: &str) -> Result<PathBuf, GitError> {
         return Err(GitError::Io("No es una carpeta".into()));
     }
     Ok(full)
+}
+
+fn entry_name(name: &str) -> Result<String, GitError> {
+    let name = name.trim();
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name == ".git"
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+    {
+        return Err(GitError::Io("El nombre no es válido".into()));
+    }
+    Ok(name.to_string())
+}
+
+fn child_relative(directory: &str, name: &str) -> Result<String, GitError> {
+    let name = entry_name(name)?;
+    let directory = directory.trim();
+    if directory.is_empty() {
+        return Ok(name);
+    }
+    let parent = normalize_relative(directory)?;
+    Ok(format!("{parent}/{name}"))
 }
 
 fn normalize_relative(relative: &str) -> Result<String, GitError> {
@@ -512,5 +623,53 @@ mod tests {
             Some("iVBORw0KGgo")
         );
         assert!(file.text.is_empty());
+    }
+
+    #[test]
+    fn creates_renames_and_removes_entries_inside_the_repository() {
+        let dir = scratch();
+        let path = repo_path(&dir);
+
+        let folder = create_workdir_dir(&path, "", "notas").expect("dir");
+        assert_eq!(folder, "notas");
+        let file = create_workdir_file(&path, "notas", "uno.md").expect("file");
+        assert_eq!(file, "notas/uno.md");
+        assert_eq!(
+            fs::read_to_string(dir.0.join("notas").join("uno.md")).expect("read"),
+            ""
+        );
+
+        let renamed = rename_workdir(&path, "notas/uno.md", "dos.md").expect("rename");
+        assert_eq!(renamed, "notas/dos.md");
+        assert!(dir.0.join("notas").join("dos.md").is_file());
+
+        let moved = rename_workdir(&path, "notas", "docs").expect("rename dir");
+        assert_eq!(moved, "docs");
+        assert!(dir.0.join("docs").join("dos.md").is_file());
+
+        remove_workdir(&path, "docs/dos.md").expect("remove file");
+        remove_workdir(&path, "docs").expect("remove dir");
+        assert!(!dir.0.join("docs").exists());
+    }
+
+    #[test]
+    fn rejects_names_and_paths_that_leave_the_repository() {
+        let dir = scratch();
+        let path = repo_path(&dir);
+        fs::write(dir.0.join("keep.txt"), "keep\n").expect("keep");
+
+        for name in ["../secret", "a/b", "", ".git", ".", ".."] {
+            assert!(create_workdir_file(&path, "", name).is_err(), "{name}");
+            assert!(create_workdir_dir(&path, "", name).is_err(), "{name}");
+        }
+        assert!(rename_workdir(&path, "keep.txt", "../secret").is_err());
+        assert!(rename_workdir(&path, ".git/HEAD", "HEAD").is_err());
+        assert!(remove_workdir(&path, "../keep.txt").is_err());
+        assert!(remove_workdir(&path, ".git").is_err());
+
+        create_workdir_file(&path, "", "other.txt").expect("other");
+        let clash = rename_workdir(&path, "keep.txt", "other.txt").expect_err("clash");
+        assert!(clash.to_string().contains("Ya existe"));
+        assert!(dir.0.join("keep.txt").is_file());
     }
 }
