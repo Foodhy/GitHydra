@@ -2,11 +2,19 @@
 
 Servidor MCP por stdio. Lee el repositorio con `git` y devuelve los DTO de `@githydra/contracts`.
 
-| Herramienta             | Respuesta           |
-| ----------------------- | ------------------- |
-| `githydra_repo_info`    | `RepositoryInfo`    |
-| `githydra_list_commits` | `CommitPage`        |
-| `githydra_working_tree` | `WorkingTreeStatus` |
+| Herramienta               | Respuesta           |
+| ------------------------- | ------------------- |
+| `githydra_repo_info`      | `RepositoryInfo`    |
+| `githydra_list_commits`   | `CommitPage`        |
+| `githydra_working_tree`   | `WorkingTreeStatus` |
+| `githydra_list_worktrees` | `LinkedWorktree[]`  |
+| `githydra_list_scripts`   | scripts             |
+| `githydra_add_script`     | scripts             |
+| `githydra_stage_files`    | stages paths        |
+| `githydra_unstage_files`  | unstages paths      |
+| `githydra_propose_commit` | proposal file       |
+| `githydra_create_branch`  | branch, same HEAD   |
+| `githydra_show_diff`      | opens the work diff |
 
 La ruta se elige en este orden:
 

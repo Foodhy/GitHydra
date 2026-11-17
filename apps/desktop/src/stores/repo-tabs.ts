@@ -6,6 +6,7 @@ import {
   initialTabs,
   newTab,
   openPath,
+  renamePath,
   reopenClosed,
   showManagement,
   type TabState,
@@ -16,6 +17,7 @@ interface RepoTabs extends TabState {
   close: (id: string) => void;
   reopen: () => string | null;
   openPath: (path: string, name: string) => void;
+  renamePath: (path: string, name: string) => void;
   activate: (id: string) => void;
   showManagement: () => void;
   activePath: () => string | null;
@@ -39,6 +41,7 @@ export const useRepoTabs = create<RepoTabs>((set, get) => ({
   },
   openPath: (path, name) =>
     set((state) => openPath(state, path, name, nextId())),
+  renamePath: (path, name) => set((state) => renamePath(state, path, name)),
   activate: (id) => set((state) => activate(state, id)),
   showManagement: () => set((state) => showManagement(state)),
   activePath: () => activePath(get()),

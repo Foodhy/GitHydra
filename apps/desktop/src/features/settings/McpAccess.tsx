@@ -1,19 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { type MessageKey, t, useT } from "../../lib/i18n";
 
-const TOOLS = [
-  {
-    name: "githydra_repo_info",
-    detail: "Metadatos del repositorio abierto: rama, HEAD y ruta.",
-  },
-  {
-    name: "githydra_list_commits",
-    detail: "Página de commits. El cursor es el último sha ya visto.",
-  },
-  {
-    name: "githydra_working_tree",
-    detail: "Archivos del árbol, con stage y sin stage.",
-  },
+const TOOLS: { name: string; detail: MessageKey }[] = [
+  { name: "githydra_repo_info", detail: "mcp.tool.repo" },
+  { name: "githydra_list_commits", detail: "mcp.tool.commits" },
+  { name: "githydra_working_tree", detail: "mcp.tool.tree" },
+  { name: "githydra_list_worktrees", detail: "mcp.tool.worktrees" },
+  { name: "githydra_stage_files", detail: "mcp.tool.stage" },
+  { name: "githydra_unstage_files", detail: "mcp.tool.unstage" },
+  { name: "githydra_propose_commit", detail: "mcp.tool.propose" },
+  { name: "githydra_create_branch", detail: "mcp.tool.branch" },
+  { name: "githydra_show_diff", detail: "mcp.tool.diff" },
 ];
 
 interface McpLaunch {
@@ -23,6 +21,7 @@ interface McpLaunch {
 }
 
 export function McpAccess() {
+  const tr = useT();
   const [launch, setLaunch] = useState<McpLaunch | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +30,7 @@ export function McpAccess() {
     invoke<McpLaunch>("mcp_launch")
       .then(setLaunch)
       .catch(() => {
-        setError("No se pudo leer la ruta del servidor.");
+        setError(t("mcp.readError"));
       });
   }, []);
 
@@ -49,14 +48,9 @@ export function McpAccess() {
   return (
     <section className="mt-10">
       <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-        MCP
+        {tr("mcp.title")}
       </h2>
-      <p className="mt-2 max-w-3xl text-sm text-muted">
-        El servidor habla por la entrada estándar. No tiene puerto ni clave. Si
-        la ventana tiene un repositorio abierto, las herramientas lo usan. Si
-        no, aceptan <span className="text-text">path</span> o la variable{" "}
-        <span className="text-text">GITHYDRA_REPO</span>.
-      </p>
+      <p className="mt-2 max-w-3xl text-sm text-muted">{tr("mcp.lead")}</p>
       <ul className="mt-4 grid gap-2">
         {TOOLS.map((tool) => (
           <li
@@ -64,7 +58,7 @@ export function McpAccess() {
             className="rounded border border-line bg-surface-raised px-3 py-2"
           >
             <p className="font-mono text-xs text-accent">{tool.name}</p>
-            <p className="mt-1 text-xs text-muted">{tool.detail}</p>
+            <p className="mt-1 text-xs text-muted">{tr(tool.detail)}</p>
           </li>
         ))}
       </ul>
@@ -90,7 +84,7 @@ export function McpAccess() {
                 }}
                 className="shrink-0 text-xs text-accent"
               >
-                {copied === snippet.id ? "Copiado" : "Copiar"}
+                {copied === snippet.id ? tr("mcp.copied") : tr("mcp.copy")}
               </button>
             </div>
             <pre className="overflow-x-auto px-3 py-2 font-mono text-[11px] leading-5 text-text">
@@ -133,19 +127,19 @@ function clientSnippets(launch: McpLaunch): {
     {
       id: "claude",
       title: "Claude",
-      where: "Claude Desktop o .mcp.json de Claude Code",
+      where: t("mcp.where.claude"),
       body: json,
     },
     {
       id: "codex",
       title: "Codex",
-      where: "~/.codex/config.toml",
+      where: t("mcp.where.codex"),
       body: toml,
     },
     {
       id: "stdio",
-      title: "Cualquier cliente",
-      where: "Comando stdio",
+      title: t("mcp.any"),
+      where: t("mcp.where.stdio"),
       body: command,
     },
   ];

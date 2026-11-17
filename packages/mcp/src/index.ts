@@ -4,7 +4,18 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { GitToolError, listCommits, repoInfo, workingTree } from "./git.js";
+import {
+  createBranch,
+  GitToolError,
+  listCommits,
+  listWorktrees,
+  proposeCommit,
+  repoInfo,
+  showDiff,
+  stageFiles,
+  unstageFiles,
+  workingTree,
+} from "./git.js";
 import { addScript, listScripts } from "./scripts.js";
 import { readSessionPath, resolveRepoPath } from "./session.js";
 
@@ -14,7 +25,7 @@ import { readSessionPath, resolveRepoPath } from "./session.js";
  */
 
 const server = new Server(
-  { name: "githydra", version: "0.13.0" },
+  { name: "githydra", version: "0.15.0" },
   { capabilities: { tools: {} } },
 );
 
@@ -59,6 +70,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "githydra_list_worktrees",
+      description:
+        "Copias enlazadas del repositorio, con bloqueo, carpeta ausente y la frase de cada situación. No crea ni borra.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+        },
+      },
+    },
+    {
       name: "githydra_list_scripts",
       description:
         "Scripts del repo en .githydra/scripts.json. No los ejecuta.",
@@ -79,8 +101,84 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           path: { type: "string" },
           name: { type: "string" },
           command: { type: "string" },
+          icon: {
+            type: "string",
+            description:
+              "Optional icon id: eraser, play, terminal, git-branch, package, bug, hammer, refresh-cw, search, sparkles. Empty clears it.",
+          },
         },
         required: ["name", "command"],
+      },
+    },
+    {
+      name: "githydra_stage_files",
+      description:
+        "Stage files with git add. Does not commit. The open window refreshes.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          files: {
+            type: "array",
+            items: { type: "string" },
+            description: "Paths relative to the repository",
+          },
+        },
+        required: ["files"],
+      },
+    },
+    {
+      name: "githydra_unstage_files",
+      description:
+        "Unstage files with git restore --staged. Leaves the working tree as it is.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          files: { type: "array", items: { type: "string" } },
+        },
+        required: ["files"],
+      },
+    },
+    {
+      name: "githydra_propose_commit",
+      description:
+        "Write a commit summary and description for the person to confirm. Does not create the commit.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          summary: { type: "string" },
+          description: { type: "string" },
+        },
+        required: ["summary"],
+      },
+    },
+    {
+      name: "githydra_create_branch",
+      description: "Create a branch without moving HEAD of the open folder.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          name: { type: "string" },
+          sha: { type: "string" },
+        },
+        required: ["name"],
+      },
+    },
+    {
+      name: "githydra_show_diff",
+      description:
+        "Ask the window to open the working diff of a file that is already in the tree.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          file: { type: "string" },
+          staged: { type: "boolean" },
+        },
+        required: ["file"],
       },
     },
   ],
@@ -112,6 +210,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
       case "githydra_working_tree":
         return json(workingTree(path));
+      case "githydra_list_worktrees":
+        return json(listWorktrees(path));
       case "githydra_list_scripts":
         return json(listScripts(path));
       case "githydra_add_script": {
@@ -120,7 +220,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!name || !command) {
           return textError("Faltan name y command.");
         }
-        return json(addScript(path, name, command));
+        return json(
+          addScript(
+            path,
+            name,
+            command,
+            stringArg(request.params.arguments?.icon),
+          ),
+        );
+      }
+      case "githydra_stage_files":
+        stageFiles(path, stringList(request.params.arguments?.files));
+        return json({ staged: true });
+      case "githydra_unstage_files":
+        unstageFiles(path, stringList(request.params.arguments?.files));
+        return json({ unstaged: true });
+      case "githydra_propose_commit": {
+        const summary = stringArg(request.params.arguments?.summary);
+        if (!summary) {
+          return textError("Missing summary.");
+        }
+        proposeCommit(
+          path,
+          summary,
+          stringArg(request.params.arguments?.description) ?? "",
+        );
+        return json({ proposed: true });
+      }
+      case "githydra_create_branch": {
+        const name = stringArg(request.params.arguments?.name);
+        if (!name) {
+          return textError("Missing branch name.");
+        }
+        return json(
+          createBranch(path, name, stringArg(request.params.arguments?.sha)),
+        );
+      }
+      case "githydra_show_diff": {
+        const file = stringArg(request.params.arguments?.file);
+        if (!file) {
+          return textError("Missing file path.");
+        }
+        const staged = request.params.arguments?.staged === true;
+        showDiff(path, file, staged);
+        return json({ file, staged });
       }
       default:
         return textError(`Herramienta desconocida: ${request.params.name}`);
@@ -138,6 +281,16 @@ function numberArg(value: unknown): number | undefined {
 
 function stringArg(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function stringList(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string");
 }
 
 function json(value: unknown) {

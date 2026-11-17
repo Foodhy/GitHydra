@@ -9,6 +9,7 @@ import "@xterm/xterm/css/xterm.css";
 import { type ProjectScripts, visiblePins } from "@githydra/contracts";
 import { loadProjectScripts } from "../../lib/project-scripts";
 import { useOverlay } from "../../stores/overlay";
+import { SCRIPT_ICON } from "../scripts/script-icons";
 import { pathFromDrop, shellToken, TERMINAL_INSERT } from "./insert";
 import { withCarriageReturn } from "./newline";
 import {
@@ -147,14 +148,14 @@ export function TerminalPanel({
           return (
             <div
               key={tab.id}
-              className={`flex max-w-48 shrink-0 items-center rounded ${
-                selected ? "bg-surface-overlay text-text" : "text-muted"
+              className={`flex max-w-48 shrink-0 items-center rounded border-b-2 ${
+                selected ? "text-text" : "text-muted"
               }`}
+              style={{
+                background: `color-mix(in srgb, ${tab.color} ${selected ? "46%" : "24%"}, transparent)`,
+                borderBottomColor: tab.color,
+              }}
             >
-              <span
-                className="ml-1.5 size-2 shrink-0 rounded-full"
-                style={{ background: tab.color }}
-              />
               {editing === tab.id ? (
                 <input
                   value={draft}
@@ -251,25 +252,30 @@ export function TerminalPanel({
             <Eraser size={12} />
           </button>
           {scripts
-            ? visiblePins(scripts).map((name) => (
-                <button
-                  key={name}
-                  type="button"
-                  title={scripts.scripts[name]}
-                  disabled={!activeId}
-                  onClick={() => {
-                    const command = scripts.scripts[name];
-                    if (!command || !activeId) {
-                      return;
-                    }
-                    pushJob(activeId, { text: `${command}\r`, clear: false });
-                    window.dispatchEvent(new CustomEvent(TERMINAL_RUN));
-                  }}
-                  className="max-w-28 truncate rounded px-1.5 py-0.5 text-[11px] text-text hover:bg-surface-overlay disabled:opacity-40"
-                >
-                  {name}
-                </button>
-              ))
+            ? visiblePins(scripts).map((name) => {
+                const icon = scripts.icons[name];
+                const Icon = icon ? SCRIPT_ICON[icon] : null;
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    title={scripts.scripts[name]}
+                    aria-label={name}
+                    disabled={!activeId}
+                    onClick={() => {
+                      const command = scripts.scripts[name];
+                      if (!command || !activeId) {
+                        return;
+                      }
+                      pushJob(activeId, { text: `${command}\r`, clear: false });
+                      window.dispatchEvent(new CustomEvent(TERMINAL_RUN));
+                    }}
+                    className="max-w-28 truncate rounded px-1.5 py-0.5 text-[11px] text-text hover:bg-surface-overlay disabled:opacity-40"
+                  >
+                    {Icon ? <Icon size={12} /> : name}
+                  </button>
+                );
+              })
             : null}
         </div>
       </div>
@@ -514,11 +520,49 @@ function TerminalSession({
 }
 
 function terminalTheme(color: string) {
+  const surface = cssColor("--color-surface", "#12141a");
+  const foreground = cssColor("--color-text", "#e7e9ef");
   return {
-    background: "#12141a",
-    foreground: "#e7e9ef",
+    background: mixHex(surface, color, 0.16),
+    foreground,
     cursor: color,
   };
+}
+
+function cssColor(name: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
+}
+
+function mixHex(base: string, tint: string, amount: number): string {
+  const left = parseHex(base);
+  const right = parseHex(tint);
+  if (!left || !right) {
+    return base;
+  }
+  const channel = (from: number, to: number) =>
+    Math.round(from + (to - from) * amount);
+  return `#${[0, 1, 2]
+    .map((index) =>
+      channel(left[index] ?? 0, right[index] ?? 0)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+function parseHex(value: string): [number, number, number] | null {
+  const normalized = value.trim().replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) {
+    return null;
+  }
+  return [
+    Number.parseInt(normalized.slice(0, 2), 16),
+    Number.parseInt(normalized.slice(2, 4), 16),
+    Number.parseInt(normalized.slice(4, 6), 16),
+  ];
 }
 
 function TerminalMenu({
@@ -578,17 +622,20 @@ function TerminalMenu({
         >
           Renombrar
         </button>
-        <div className="flex flex-wrap gap-1 px-3 py-1.5">
+        <div className="grid grid-cols-4 gap-1 px-3 py-1.5">
           {TERMINAL_COLORS.map((swatch) => (
             <button
               key={swatch}
               type="button"
               aria-label={`Color ${swatch}`}
               onClick={() => onColor(swatch)}
-              className={`size-4 rounded-full ${
-                swatch === color ? "ring-2 ring-text" : ""
+              className={`h-5 rounded-sm border-b-2 ${
+                swatch === color ? "ring-1 ring-text" : ""
               }`}
-              style={{ background: swatch }}
+              style={{
+                background: `color-mix(in srgb, ${swatch} 46%, transparent)`,
+                borderBottomColor: swatch,
+              }}
             />
           ))}
         </div>

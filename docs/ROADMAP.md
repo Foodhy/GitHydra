@@ -2,7 +2,7 @@
 
 Un paso es un cambio reviewable. No se empieza el siguiente hasta que el activo se prueba con `pnpm dev` y queda en `main`.
 
-No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.13.0`.
+No hay un paso activo. Cada paso que llega a `main` sube la versión que muestra la ventana. Ahora es `0.15.0`.
 
 ## Hecho — fase 0
 
@@ -93,6 +93,15 @@ Ya está en el primer commit:
 
 - [x] Preferencias muestra las herramientas y el texto para conectar Cursor, Claude, Codex u otro cliente.
 
+### 20. Worktrees — hecho en 0.14.0
+
+- [x] Abrir una rama en otra carpeta sin mover el checkout actual. La lista muestra la ruta, la rama o el sha, y la frase de cada problema: rama ocupada, bloqueo, carpeta ausente, bloqueo con carpeta ausente y cambios sin commit. El MCP solo lista.
+
+### 21. Inglés y el circuito del agente — hecho en 0.15.0
+
+- [x] La ventana abre en inglés, o en español si el sistema o Preferencias lo piden. Los mensajes de git salen en inglés y la ventana los pasa al español cuando toca.
+- [x] El agente deja archivos en stage, propone el mensaje, crea una rama sin mover `HEAD` y pide el diff. El commit lo confirma la persona.
+
 ### Más adelante, en ese mismo menú
 
 - [x] Upstream
@@ -100,7 +109,7 @@ Ya está en el primer commit:
 - [ ] Merge
 - [ ] Rebase
 - [x] Checkout de un commit, con `HEAD` suelto
-- [ ] Worktree — diseño en [WORKTREES.md](WORKTREES.md), todavía sin paso activo
+- [x] Worktree — paso 20, uso en [WORKTREES.md](WORKTREES.md)
 - [ ] Cherry-pick
 - [ ] Reset de la rama a un commit
 - [ ] Revert

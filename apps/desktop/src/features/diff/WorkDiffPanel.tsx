@@ -14,6 +14,7 @@ import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { discardPrompt } from "../../lib/discard-prompt";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { type MessageKey, t, useT } from "../../lib/i18n";
 import { CodeDiff, noteOf, sideText } from "./CodeDiff";
 
 export interface WorkFile {
@@ -23,11 +24,11 @@ export interface WorkFile {
 
 type DiffView = "unido" | "lados" | "antes" | "despues";
 
-const VIEWS: { id: DiffView; label: string; icon: LucideIcon }[] = [
-  { id: "unido", label: "Unido", icon: Rows3 },
-  { id: "lados", label: "Lado a lado", icon: Columns2 },
-  { id: "antes", label: "Antes", icon: FileMinus },
-  { id: "despues", label: "Después", icon: FilePlus },
+const VIEWS: { id: DiffView; label: MessageKey; icon: LucideIcon }[] = [
+  { id: "unido", label: "diff.unified", icon: Rows3 },
+  { id: "lados", label: "diff.side", icon: Columns2 },
+  { id: "antes", label: "diff.before", icon: FileMinus },
+  { id: "despues", label: "diff.after", icon: FilePlus },
 ];
 
 export function WorkDiffPanel({
@@ -45,6 +46,7 @@ export function WorkDiffPanel({
   onDiscarded: () => void;
   onRepositoryChanged: () => Promise<void>;
 }) {
+  useT();
   const [diff, setDiff] = useState<WorkDiff | null>(null);
   const [files, setFiles] = useState<WorkFile[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -191,7 +193,7 @@ export function WorkDiffPanel({
           className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-accent"
         >
           <Pencil size={12} />
-          Editar
+          {t("diff.edit")}
         </button>
         <div className="flex gap-1">
           {VIEWS.map((item) => {
@@ -208,7 +210,7 @@ export function WorkDiffPanel({
                 }`}
               >
                 <Icon size={12} />
-                {item.label}
+                {t(item.label)}
               </button>
             );
           })}

@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   emptyScripts,
+  isScriptIcon,
   type ProjectScripts,
   parseScripts,
   putScript,
@@ -35,9 +36,19 @@ export function addScript(
   path: string,
   name: string,
   command: string,
+  icon?: string | null,
 ): ProjectScripts {
   const root = repoInfo(path).path;
-  const next = putScript(listScripts(root), name, command);
+  if (icon && !isScriptIcon(icon)) {
+    throw new GitToolError(`Icono desconocido: ${icon}`);
+  }
+  const chosen =
+    icon && isScriptIcon(icon)
+      ? icon
+      : icon === null || icon === ""
+        ? null
+        : undefined;
+  const next = putScript(listScripts(root), name, command, chosen);
   if ("error" in next) {
     throw new GitToolError(next.error);
   }

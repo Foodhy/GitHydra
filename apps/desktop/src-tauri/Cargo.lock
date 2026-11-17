@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "githydra-desktop"
-version = "0.13.0"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "git2",

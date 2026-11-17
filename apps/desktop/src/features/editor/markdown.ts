@@ -21,7 +21,11 @@ export function renderMarkdown(source: string): string {
       if (index < lines.length) {
         index += 1;
       }
-      blocks.push(`<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`);
+      const lang = line.slice(3).trim().split(/\s+/)[0] ?? "";
+      const language = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
+      blocks.push(
+        `<pre${language}><code>${escapeHtml(body.join("\n"))}</code></pre>`,
+      );
       continue;
     }
     if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
@@ -156,6 +160,20 @@ function inline(source: string): string {
         continue;
       }
     }
+    if (source.startsWith("![", index)) {
+      const endText = source.indexOf("]", index + 2);
+      if (endText >= index + 2 && source[endText + 1] === "(") {
+        const endUrl = source.indexOf(")", endText + 2);
+        if (endUrl > endText) {
+          const alt = source.slice(index + 2, endText);
+          const raw = source.slice(endText + 2, endUrl).trim();
+          const url = raw.replace(/\s+["'][^"']*["']$/, "");
+          html += imageTag(alt, url);
+          index = endUrl + 1;
+          continue;
+        }
+      }
+    }
     if (source[index] === "[") {
       const endText = source.indexOf("]", index + 1);
       if (endText > index && source[endText + 1] === "(") {
@@ -184,6 +202,53 @@ function inline(source: string): string {
     index += 1;
   }
   return html;
+}
+
+function imageTag(alt: string, url: string): string {
+  const target = resolveMarkdownAsset("file.md", url);
+  if (!target) {
+    return escapeHtml(alt);
+  }
+  return `<img alt="${escapeHtml(alt)}" src="${escapeHtml(url)}" />`;
+}
+
+/** Local path inside the repo, or an http(s) / data-image address. */
+export function resolveMarkdownAsset(file: string, url: string): string | null {
+  const bare = url.trim().split(/[?#]/)[0] ?? "";
+  if (
+    bare.startsWith("https://") ||
+    bare.startsWith("http://") ||
+    bare.startsWith("data:image/")
+  ) {
+    return bare;
+  }
+  if (
+    bare.startsWith("//") ||
+    bare.startsWith("/") ||
+    bare.startsWith("\\") ||
+    bare.includes("\\") ||
+    /^[a-z][a-z0-9+.-]*:/i.test(bare)
+  ) {
+    return null;
+  }
+  const parts = file.split("/").slice(0, -1);
+  for (const piece of bare.split("/")) {
+    if (piece === "" || piece === ".") {
+      continue;
+    }
+    if (piece === "..") {
+      if (parts.length === 0) {
+        return null;
+      }
+      parts.pop();
+      continue;
+    }
+    parts.push(piece);
+  }
+  if (parts.length === 0 || parts.includes(".git")) {
+    return null;
+  }
+  return parts.join("/");
 }
 
 function safeUrl(url: string): boolean {

@@ -5,7 +5,12 @@ import { useBranches } from "../../hooks/useBranches";
 import { useCommitLog } from "../../hooks/useCommitLog";
 import { formatWhen, subjectOf } from "../../lib/format";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { useT } from "../../lib/i18n";
 import { runOperation } from "../../lib/run-operation";
+import {
+  AddWorktreeDialog,
+  type WorktreeSeed,
+} from "../branches/AddWorktreeDialog";
 import { branchColor } from "../graph/colors";
 import { CommitGraph } from "../graph/GraphPanel";
 import { GRAPH_ROW_HEIGHT } from "../graph/layout";
@@ -26,11 +31,13 @@ export function HistoryPanel({
   const { commits, cursor, loading, refreshing, error, loadMore } =
     useCommitLog(path, revision);
   const { branches } = useBranches(path, revision);
+  const tr = useT();
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
     items: MenuItem[];
   } | null>(null);
+  const [worktreeSeed, setWorktreeSeed] = useState<WorktreeSeed | null>(null);
 
   function openCommit(sha: string, event: MouseEvent) {
     const commit = commits.find((item) => item.sha === sha);
@@ -50,7 +57,7 @@ export function HistoryPanel({
         {error ? <p className="px-3 py-2 text-xs text-warn">{error}</p> : null}
         {refreshing ? (
           <p className="px-3 py-1 text-[11px] text-muted">
-            Actualizando historial…
+            {tr("history.updating")}
           </p>
         ) : null}
         <div className="flex min-w-0">
@@ -77,12 +84,12 @@ export function HistoryPanel({
           </ul>
         </div>
         {loading && commits.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted">Cargando…</p>
+          <p className="px-3 py-2 text-xs text-muted">
+            {tr("history.loading")}
+          </p>
         ) : null}
         {!loading && commits.length === 0 && !error ? (
-          <p className="px-3 py-2 text-xs text-muted">
-            Este repositorio todavía no tiene commits.
-          </p>
+          <p className="px-3 py-2 text-xs text-muted">{tr("history.empty")}</p>
         ) : null}
         {cursor ? (
           <div className="px-3 py-2">
@@ -94,7 +101,7 @@ export function HistoryPanel({
               disabled={loading}
               className="text-xs text-accent hover:underline disabled:text-muted"
             >
-              {loading ? "Cargando…" : "Cargar más"}
+              {loading ? tr("history.loading") : tr("history.more")}
             </button>
           </div>
         ) : null}
@@ -107,6 +114,14 @@ export function HistoryPanel({
           onClose={() => setMenu(null)}
         />
       ) : null}
+      {worktreeSeed ? (
+        <AddWorktreeDialog
+          path={path}
+          seed={worktreeSeed}
+          onClose={() => setWorktreeSeed(null)}
+          onRepositoryChanged={onRepositoryChanged}
+        />
+      ) : null}
     </div>
   );
 
@@ -114,28 +129,26 @@ export function HistoryPanel({
     return [
       {
         id: "diff",
-        label: "Ver cambios",
+        label: tr("history.view"),
         onSelect: () => onSelect(commit.sha),
       },
       {
         id: "copy",
-        label: "Copiar sha",
+        label: tr("history.copySha"),
         onSelect: () => {
           void navigator.clipboard.writeText(commit.sha);
         },
       },
       {
         id: "checkout",
-        label: "Checkout de este commit",
+        label: tr("history.checkout"),
         onSelect: () => {
-          if (
-            !window.confirm("HEAD queda suelto en este commit. ¿Continuar?")
-          ) {
+          if (!window.confirm(tr("history.confirmDetach"))) {
             return;
           }
           void runOperation(
             "checkout",
-            "Cambiando a este commit",
+            tr("history.checkingOut"),
             () => tauriGit.checkoutCommit(path, commit.sha),
             onRepositoryChanged,
           );
@@ -143,38 +156,46 @@ export function HistoryPanel({
       },
       {
         id: "tag",
-        label: "Crear tag",
+        label: tr("history.tag"),
         onSelect: () => {
-          const tagName = window.prompt("Nombre del tag");
+          const tagName = window.prompt(tr("history.askTag"));
           if (!tagName) {
             return;
           }
-          const message = window.prompt(
-            "Mensaje del tag. Vacío crea un tag ligero.",
-            "",
-          );
+          const message = window.prompt(tr("history.askTagMessage"), "");
           if (message === null) {
             return;
           }
           void runOperation(
             "other",
-            "Creando tag",
+            tr("history.creatingTag"),
             () => tauriGit.createTag(path, commit.sha, tagName, message),
             onRepositoryChanged,
           );
         },
       },
       {
-        id: "branch",
-        label: "Crear rama aquí",
+        id: "worktree",
+        label: tr("branch.worktree"),
         onSelect: () => {
-          const nextName = window.prompt("Nombre de la nueva rama");
+          setWorktreeSeed({
+            branch: "",
+            sha: commit.sha,
+            createBranch: true,
+          });
+        },
+      },
+      {
+        id: "branch",
+        label: tr("branch.createHere"),
+        onSelect: () => {
+          const nextName = window.prompt(tr("branch.askName"));
           if (!nextName) {
             return;
           }
           void runOperation(
             "other",
-            "Creando rama",
+            tr("branch.creating"),
             () => tauriGit.createBranchAt(path, nextName, commit.sha),
             onRepositoryChanged,
           );

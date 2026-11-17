@@ -26,6 +26,7 @@ import {
   syncWindowPanels,
 } from "../../lib/file-menu";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { useT } from "../../lib/i18n";
 import { useCommandUi } from "../../stores/command-ui";
 import { useOverlay } from "../../stores/overlay";
 import { useRepoSession } from "../../stores/repo-session";
@@ -46,6 +47,7 @@ import { StagingPanel } from "../staging/StagingPanel";
 import { TERMINAL_RUN } from "../terminal/run";
 import { TerminalSlot, useTerminalHost } from "../terminal/TerminalChrome";
 import { TerminalPanel } from "../terminal/TerminalPanel";
+import { CursorConnectStrip } from "./CursorConnectStrip";
 import { bindCenterViews } from "./center-views";
 import { loadProjectTree, writeProjectTree } from "./layout-presets";
 import {
@@ -78,6 +80,8 @@ const PANEL_ICON: Record<PanelId, LucideIcon> = {
 export function WorkspaceShell({ path }: { path: string }) {
   const setInfo = useRepoSession((state) => state.setInfo);
   const [revision, setRevision] = useState(0);
+  const [cueNotice, setCueNotice] = useState<string | null>(null);
+  const tr = useT();
   const [tree, setTree] = useState<LayoutNode>(() =>
     loadProjectTree(localStorage, path),
   );
@@ -162,7 +166,19 @@ export function WorkspaceShell({ path }: { path: string }) {
   async function refreshRepository() {
     const repo = await tauriGit.openRepository(path);
     setInfo(repo);
+    const show = await tauriGit.takeShowDiff(path).catch(() => null);
     setRevision((current) => current + 1);
+    if (!show) {
+      return;
+    }
+    if (show.missing) {
+      setCueNotice(tr("stage.notInTree", { file: show.file }));
+      return;
+    }
+    setCueNotice(null);
+    setSelectedSha(null);
+    setWorkFile({ path: show.file, staged: show.staged });
+    setTree((current) => openPanel(current, "history"));
   }
 
   useRepoSync(path, refreshRepository);
@@ -359,11 +375,17 @@ export function WorkspaceShell({ path }: { path: string }) {
         onApplyLayout={setTree}
         onRepositoryChanged={refreshRepository}
       />
+      <CursorConnectStrip />
+      {cueNotice ? (
+        <p className="border-b border-line px-3 py-1 text-xs text-warn">
+          {cueNotice}
+        </p>
+      ) : null}
       <div className="min-h-0 flex-1">
         <LayoutBranch
           node={tree}
           labelFor={(panel) =>
-            panel === "browser" ? browserLabel : panelLabel[panel]
+            panel === "browser" ? browserLabel : panelLabel(panel)
           }
           onActivate={activatePanel}
           onClose={(panel) => setTree((current) => closePanel(current, panel))}

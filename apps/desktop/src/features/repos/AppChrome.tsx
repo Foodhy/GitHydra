@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { installFileMenu, syncFileMenu } from "../../lib/file-menu";
+import { type t, useT } from "../../lib/i18n";
 import {
   bindRepoNavigation,
   closeRepoTab,
@@ -18,6 +19,7 @@ export function AppChrome() {
   const tabs = useRepoTabs((state) => state.tabs);
   const activeId = useRepoTabs((state) => state.activeId);
   const closed = useRepoTabs((state) => state.closed);
+  const tr = useT();
   const notice = useCommandUi((state) => state.notice);
   const setNotice = useCommandUi((state) => state.setNotice);
   useGitProgress();
@@ -81,13 +83,15 @@ export function AppChrome() {
                   type="button"
                   onClick={() => focusRepoTab(tab.id)}
                   className="min-w-0 truncate px-2 text-xs"
-                  title={tab.path ?? tab.name}
+                  title={tab.path ?? shownTab(tab.name, tr)}
                 >
-                  {tab.name}
+                  {shownTab(tab.name, tr)}
                 </button>
                 <button
                   type="button"
-                  aria-label={`Cerrar ${tab.name}`}
+                  aria-label={tr("tab.close", {
+                    name: shownTab(tab.name, tr),
+                  })}
                   onClick={() => closeRepoTab(tab.id)}
                   className="mr-1 rounded p-0.5 hover:bg-surface hover:text-text"
                 >
@@ -99,8 +103,8 @@ export function AppChrome() {
         </div>
         <button
           type="button"
-          aria-label="Nueva pestaña"
-          title="Nueva pestaña"
+          aria-label={tr("menu.newTab")}
+          title={tr("menu.newTab")}
           onClick={openNewTab}
           className="rounded px-2 text-sm text-muted hover:bg-surface-overlay hover:text-text"
         >
@@ -115,11 +119,21 @@ export function AppChrome() {
             onClick={() => setNotice(null)}
             className="text-xs text-muted"
           >
-            Cerrar
+            {tr("common.close")}
           </button>
         </div>
       ) : null}
       <CloneDialog />
     </>
   );
+}
+
+function shownTab(name: string, tr: typeof t): string {
+  if (name === "Inicio") {
+    return tr("tab.home");
+  }
+  if (name === "Nuevo") {
+    return tr("tab.new");
+  }
+  return name;
 }

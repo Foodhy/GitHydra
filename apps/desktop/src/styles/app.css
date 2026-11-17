@@ -101,6 +101,21 @@
     text-align: left;
   }
 
+  .markdown-view img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .markdown-view .mermaid-block {
+    margin: 0.75rem 0;
+    overflow: auto;
+  }
+
+  .markdown-view .mermaid-block svg {
+    max-width: 100%;
+    height: auto;
+  }
+
   button,
   input,
   textarea {
@@ -123,6 +138,129 @@
   html[data-style="ultra"] textarea {
     border-radius: 0;
   }
+}
+
+[data-style="cyberpunk"],
+[data-style="hacker"],
+[data-style="linux"],
+[data-style="anthropic"],
+[data-style="openai"],
+[data-style="xspace"],
+[data-style="pokemon"] {
+  position: relative;
+}
+
+[data-style="hacker"]::before,
+[data-style="linux"]::before,
+[data-style="pokemon"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+[data-style="cyberpunk"],
+[data-style="cyberpunk"] .bg-surface,
+[data-style="cyberpunk"] .bg-surface-raised,
+[data-style="cyberpunk"] .bg-surface-overlay {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-graph-edge) 22%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-accent) 18%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 28px 28px;
+}
+
+[data-style="cyberpunk"] .border-line {
+  border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-line));
+}
+
+[data-style="cyberpunk"] .bg-accent {
+  box-shadow: 0 0 16px color-mix(in srgb, var(--color-accent) 70%, transparent);
+}
+
+[data-style="cyberpunk"] .bg-surface-raised,
+[data-style="cyberpunk"] .bg-surface-overlay,
+[data-style="xspace"] .bg-surface-raised,
+[data-style="xspace"] .bg-surface-overlay {
+  backdrop-filter: blur(16px);
+  background-color: color-mix(
+    in srgb,
+    var(--color-surface-raised) 74%,
+    transparent
+  );
+}
+
+[data-style="openai"] .bg-surface-raised,
+[data-style="openai"] .bg-surface-overlay {
+  backdrop-filter: blur(8px);
+  background-color: color-mix(
+    in srgb,
+    var(--color-surface-raised) 88%,
+    transparent
+  );
+}
+
+[data-style="hacker"],
+[data-style="hacker"] body {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+[data-style="hacker"]::before {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    color-mix(in srgb, var(--color-accent) 14%, transparent) 3px
+  );
+  opacity: 0.55;
+}
+
+[data-style="linux"]::before {
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--color-accent);
+}
+
+[data-style="anthropic"] h1,
+[data-style="anthropic"] h2 {
+  font-family:
+    "Iowan Old Style", Palatino, "Palatino Linotype", ui-serif, serif;
+}
+
+[data-style="anthropic"] .bg-surface-raised {
+  box-shadow: 0 10px 28px color-mix(in srgb, #1f1a17 10%, transparent);
+}
+
+[data-style="xspace"],
+[data-style="xspace"] .bg-surface {
+  background-image:
+    radial-gradient(
+      circle at 18% 0%,
+      color-mix(in srgb, var(--color-graph-edge) 28%, transparent),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at 90% 8%,
+      color-mix(in srgb, var(--color-accent) 18%, transparent),
+      transparent 30%
+    );
+}
+
+[data-style="pokemon"]::before {
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--color-accent) 0 33%,
+    #ffcb05 33% 66%,
+    var(--color-graph-edge) 66% 100%
+  );
 }
 
 [data-theme-preview] button,

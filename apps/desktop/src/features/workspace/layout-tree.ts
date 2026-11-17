@@ -1,3 +1,4 @@
+import { type MessageKey, t } from "../../lib/i18n.ts";
 import type { TerminalDock } from "../terminal/dock.ts";
 import type { CenterView } from "./center-views.ts";
 import type { PlacedView } from "./view-dock.ts";
@@ -47,22 +48,13 @@ export interface Box {
   height: number;
 }
 
-export const zoneLabel: Record<EdgeZone, string> = {
-  right: "A la derecha",
-  left: "A la izquierda",
-  top: "Arriba",
-  bottom: "Abajo",
-};
+export function zoneLabel(zone: EdgeZone): string {
+  return t(`zone.${zone}` as MessageKey);
+}
 
-export const panelLabel: Record<PanelId, string> = {
-  branches: "Ramas",
-  history: "Historial",
-  editor: "Editor",
-  browser: "Browser",
-  changes: "Cambios",
-  terminal: "Terminal",
-  scripts: "Scripts",
-};
+export function panelLabel(id: PanelId): string {
+  return t(`panel.${id}` as MessageKey);
+}
 
 const PERMANENT: PanelId[] = ["branches", "changes"];
 const CENTER: CenterView[] = ["history", "editor", "browser"];

@@ -5,6 +5,13 @@ import { useAppVersion } from "../../hooks/useAppVersion";
 import { formatWhen } from "../../lib/format";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { useT } from "../../lib/i18n";
+import {
+  beginOnboarding,
+  finishOnboarding,
+  readOnboarding,
+  shouldOnboard,
+} from "../../lib/onboarding";
 import { clearOpenRepo } from "../../lib/open-session";
 import { type RecentRepo, readRecents } from "../../lib/recents";
 import { adoptRepository, openChosenFolder } from "../../lib/repo-actions";
@@ -18,12 +25,22 @@ export function WelcomePage() {
   const [busy, setBusy] = useState(false);
   const openClone = useCommandUi((state) => state.openClone);
   const [desktopReady, setDesktopReady] = useState(true);
+  const [onboarding, setOnboarding] = useState(false);
   const version = useAppVersion();
+  const tr = useT();
 
   useEffect(() => {
     clearOpenRepo().catch(() => undefined);
-    readRecents()
-      .then(setRecents)
+    Promise.all([readRecents(), readOnboarding()])
+      .then(([repos, state]) => {
+        setRecents(repos);
+        const show = shouldOnboard(state.done, repos.length);
+        setOnboarding(show);
+        if (show) {
+          return beginOnboarding();
+        }
+        return undefined;
+      })
       .catch(() => setDesktopReady(false));
   }, []);
 
@@ -60,19 +77,35 @@ export function WelcomePage() {
           GitHydra <span className="font-mono tracking-normal">v{version}</span>
         </p>
         <div className="mt-2 flex items-end justify-between gap-3">
-          <h1 className="text-3xl font-semibold">Abrir un repositorio</h1>
+          <h1 className="text-3xl font-semibold">{tr("welcome.kicker")}</h1>
           <Link to="/settings" className="text-xs text-accent">
-            Preferencias
+            {tr("welcome.settings")}
           </Link>
         </div>
-        <p className="mt-2 text-sm text-muted">
-          Elige una carpeta git local o clona una URL.
-        </p>
+        <p className="mt-2 text-sm text-muted">{tr("welcome.lead")}</p>
+        {onboarding ? (
+          <div className="mt-4 flex items-start justify-between gap-3">
+            <p className="text-sm">
+              <span className="mr-2 text-xs text-accent">
+                {tr("onboard.progress", { step: 1 })}
+              </span>
+              {tr("onboard.next")}
+            </p>
+            <button
+              type="button"
+              className="shrink-0 text-xs text-muted"
+              onClick={() => {
+                setOnboarding(false);
+                void finishOnboarding();
+              }}
+            >
+              {tr("onboard.skip")}
+            </button>
+          </div>
+        ) : null}
         {error ? <p className="mt-4 text-sm text-warn">{error}</p> : null}
         {!desktopReady ? (
-          <p className="mt-4 text-sm text-muted">
-            Abre la ventana de escritorio con `pnpm dev`.
-          </p>
+          <p className="mt-4 text-sm text-muted">{tr("welcome.desktop")}</p>
         ) : null}
         <div className="mt-6 flex gap-3">
           <button
@@ -84,7 +117,7 @@ export function WelcomePage() {
             className="inline-flex items-center gap-2 rounded bg-accent px-4 py-2 text-sm font-medium text-surface disabled:opacity-50"
           >
             <FolderOpen size={16} />
-            Abrir carpeta
+            {tr("welcome.open")}
           </button>
           <button
             type="button"
@@ -93,17 +126,15 @@ export function WelcomePage() {
             className="inline-flex items-center gap-2 rounded border border-line px-4 py-2 text-sm"
           >
             <GitBranchPlus size={16} />
-            Clonar desde URL
+            {tr("welcome.clone")}
           </button>
         </div>
         <section className="mt-8">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Recientes
+            {tr("welcome.recent")}
           </h2>
           {recents.length === 0 ? (
-            <p className="mt-3 text-sm text-muted">
-              Todavía no hay repositorios recientes.
-            </p>
+            <p className="mt-3 text-sm text-muted">{tr("welcome.empty")}</p>
           ) : (
             <ul className="mt-3 divide-y divide-line overflow-hidden rounded border border-line">
               {recents.map((repo) => (

@@ -507,6 +507,7 @@ export function EditorPanel({
                 </div>
                 <div className="min-h-0 flex-1">
                   <BufferBody
+                    repo={path}
                     tab={tab}
                     preview={preview}
                     mode={mode}
@@ -637,6 +638,7 @@ function FileTab({
 }
 
 function BufferBody({
+  repo,
   tab,
   preview,
   mode,
@@ -647,6 +649,7 @@ function BufferBody({
   onCursor,
   onRetry,
 }: {
+  repo: string;
   tab: EditorBuffer;
   preview: "markdown" | "svg" | null;
   mode: "code" | "preview";
@@ -685,7 +688,7 @@ function BufferBody({
     );
   }
   if (preview === "markdown" && mode === "preview") {
-    return <MarkdownView text={tab.text} />;
+    return <MarkdownView text={tab.text} repo={repo} file={tab.path} />;
   }
   if (preview === "svg" && mode === "preview") {
     return <SvgView text={tab.text} />;

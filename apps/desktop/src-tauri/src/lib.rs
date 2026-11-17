@@ -518,6 +518,57 @@ fn drop_stash(path: String, index: u32) -> Result<(), git::GitError> {
 }
 
 #[tauri::command]
+fn read_commit_proposal(path: String) -> Result<Option<git::CommitProposal>, git::GitError> {
+    in_repo(&path, || git::read_commit_proposal(&path))
+}
+
+#[tauri::command]
+fn take_show_diff(path: String) -> Result<Option<git::ShowDiffRequest>, git::GitError> {
+    in_repo(&path, || git::take_show_diff(&path))
+}
+
+#[tauri::command]
+fn list_worktrees(path: String) -> Result<Vec<git::LinkedWorktree>, git::GitError> {
+    in_repo(&path, || git::list_worktrees(&path))
+}
+
+#[tauri::command]
+fn add_worktree(
+    path: String,
+    directory: String,
+    branch: String,
+    sha: Option<String>,
+    create_branch: bool,
+) -> Result<git::RepositoryInfo, git::GitError> {
+    in_repo(&path, || {
+        git::add_worktree(
+            &path,
+            &git::AddWorktreeRequest {
+                directory,
+                branch,
+                sha,
+                create_branch,
+            },
+        )
+    })
+}
+
+#[tauri::command]
+fn remove_worktree(path: String, worktree_path: String, force: bool) -> Result<(), git::GitError> {
+    in_repo(&path, || git::remove_worktree(&path, &worktree_path, force))
+}
+
+#[tauri::command]
+fn unlock_worktree(path: String, worktree_path: String) -> Result<(), git::GitError> {
+    in_repo(&path, || git::unlock_worktree(&path, &worktree_path))
+}
+
+#[tauri::command]
+fn prune_worktrees(path: String) -> Result<(), git::GitError> {
+    in_repo(&path, || git::prune_worktrees(&path))
+}
+
+#[tauri::command]
 fn fetch(app: tauri::AppHandle, path: String) -> Result<(), git::GitError> {
     networked(app, &path, || git::fetch(&path))
 }
@@ -710,6 +761,13 @@ pub fn run() {
             apply_stash,
             pop_stash,
             drop_stash,
+            read_commit_proposal,
+            take_show_diff,
+            list_worktrees,
+            add_worktree,
+            remove_worktree,
+            unlock_worktree,
+            prune_worktrees,
             fetch,
             pull,
             push,

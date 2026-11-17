@@ -1,6 +1,15 @@
 import { Link } from "@tanstack/react-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  Cpu,
+  Feather,
+  Hexagon,
+  Monitor,
+  Rocket,
+  Star,
+  Terminal,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   ACCENTS,
@@ -22,6 +31,13 @@ import {
   saveExternalApps,
 } from "../../lib/external-apps";
 import {
+  getLocale,
+  type MessageKey,
+  saveLocale,
+  t,
+  useT,
+} from "../../lib/i18n";
+import {
   appBundlePath,
   appChoices,
   type InstalledApp,
@@ -36,6 +52,7 @@ import { AppThemePreview } from "./AppThemePreview";
 import { McpAccess } from "./McpAccess";
 
 export function SettingsPage() {
+  const tr = useT();
   const [styleId, setStyleId] = useState("hydra");
   const [accent, setAccent] = useState(VISUAL_STYLES[0].tokens.accent);
   const [saved, setSaved] = useState(false);
@@ -68,17 +85,17 @@ export function SettingsPage() {
         setAccent(appearance.accent);
       })
       .catch(() => {
-        setError("No se pudieron leer las preferencias.");
+        setError(t("settings.read"));
       });
     readExternalApps()
       .then(setApps)
       .catch(() => {
-        setAppsError("No se pudieron leer las aplicaciones externas.");
+        setAppsError(t("settings.appsRead"));
       });
     readCommitAi()
       .then(setAi)
       .catch(() => {
-        setAiError("No se pudieron leer los mensajes con IA.");
+        setAiError(t("settings.aiRead"));
       });
     invoke<InstalledApps>("installed_apps")
       .then((found) => {
@@ -87,7 +104,7 @@ export function SettingsPage() {
       })
       .catch(() => {
         setAppsReady(true);
-        setAppsError("No se pudieron detectar las aplicaciones instaladas.");
+        setAppsError(t("settings.appsDetect"));
       });
   }, []);
 
@@ -103,7 +120,7 @@ export function SettingsPage() {
       setApps(next);
       setAppsSaved(true);
     } catch {
-      setAppsError("No se pudieron guardar las aplicaciones externas.");
+      setAppsError(tr("settings.appsSaveError"));
     }
   }
 
@@ -111,8 +128,11 @@ export function SettingsPage() {
     const selected = await open({
       directory: false,
       multiple: false,
-      title: kind === "editor" ? "Elegir editor" : "Elegir terminal",
-      filters: [{ name: "Aplicación", extensions: ["app"] }],
+      title:
+        kind === "editor"
+          ? tr("settings.pickEditor")
+          : tr("settings.pickTerminal"),
+      filters: [{ name: tr("settings.appFilter"), extensions: ["app"] }],
     });
     const bundle =
       typeof selected === "string" ? appBundlePath(selected) : null;
@@ -127,7 +147,7 @@ export function SettingsPage() {
     setAiError(null);
     setAiSaved(false);
     if (ai.enabled && ai.providers.length === 0) {
-      setAiError("Elige al menos un proveedor.");
+      setAiError(tr("settings.aiNeed"));
       return;
     }
     try {
@@ -135,7 +155,7 @@ export function SettingsPage() {
       setAi(await readCommitAi());
       setAiSaved(true);
     } catch {
-      setAiError("No se pudieron guardar los mensajes con IA.");
+      setAiError(tr("settings.aiSaveError"));
     }
   }
 
@@ -146,7 +166,7 @@ export function SettingsPage() {
       await saveAppearance(styleId, accent);
       setSaved(true);
     } catch {
-      setError("No se pudieron guardar las preferencias.");
+      setError(tr("settings.save"));
     }
   }
 
@@ -154,17 +174,41 @@ export function SettingsPage() {
     <main className="flex h-full min-h-0 flex-col overflow-hidden bg-surface text-text lg:flex-row">
       <aside className="order-2 max-h-[46%] min-h-0 w-full shrink-0 overflow-auto border-t border-line px-5 py-5 lg:order-1 lg:max-h-none lg:w-80 lg:border-t-0 lg:border-r">
         <Link to="/" className="text-xs text-accent">
-          Volver
+          {tr("settings.back")}
         </Link>
-        <h1 className="mt-3 text-2xl font-semibold">Preferencias</h1>
-        <p className="mt-2 text-sm text-muted">
-          Elige un estilo. La vista de al lado es la app entera, para ver cómo
-          queda antes de usarlo.
-        </p>
+        <h1 className="mt-3 text-2xl font-semibold">{tr("settings.title")}</h1>
+        <p className="mt-2 text-sm text-muted">{tr("settings.lead")}</p>
         {error ? <p className="mt-4 text-sm text-warn">{error}</p> : null}
         <section className="mt-6">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Estilos
+            {tr("settings.language")}
+          </h2>
+          <div className="mt-3 flex gap-2">
+            {(["en", "es"] as const).map((language) => (
+              <button
+                key={language}
+                type="button"
+                onClick={() => {
+                  void saveLocale(language);
+                }}
+                className={`rounded border px-3 py-1.5 text-sm ${
+                  getLocale() === language
+                    ? "border-accent bg-surface-raised"
+                    : "border-line"
+                }`}
+              >
+                {tr(
+                  language === "en"
+                    ? "settings.language.en"
+                    : "settings.language.es",
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="mt-6">
+          <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
+            {tr("settings.styles")}
           </h2>
           <div className="mt-3 grid gap-2">
             {VISUAL_STYLES.map((style) => {
@@ -185,7 +229,10 @@ export function SettingsPage() {
                   }`}
                 >
                   <span className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium">{style.name}</span>
+                    <span className="flex items-center gap-2 text-sm font-medium">
+                      <StyleMark id={style.id} />
+                      {styleTitle(style.id)}
+                    </span>
                     <span className="flex overflow-hidden rounded-full">
                       <span
                         className="h-3 w-3"
@@ -202,7 +249,7 @@ export function SettingsPage() {
                     </span>
                   </span>
                   <span className="mt-0.5 block text-xs text-muted">
-                    {style.detail}
+                    {tr(`style.${style.id}.detail` as MessageKey)}
                   </span>
                 </button>
               );
@@ -211,14 +258,14 @@ export function SettingsPage() {
         </section>
         <section className="mt-6">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Acento
+            {tr("settings.accent")}
           </h2>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {ACCENTS.map((swatch) => (
               <button
                 key={swatch}
                 type="button"
-                aria-label={`Acento ${swatch}`}
+                aria-label={`${tr("settings.accent")} ${swatch}`}
                 onClick={() => {
                   setAccent(swatch);
                   setSaved(false);
@@ -232,7 +279,7 @@ export function SettingsPage() {
               />
             ))}
             <label className="flex items-center gap-2 text-xs text-muted">
-              Color
+              {tr("settings.color")}
               <input
                 type="color"
                 value={toColorInput(accent)}
@@ -251,22 +298,19 @@ export function SettingsPage() {
             }}
             className="mt-4 rounded bg-accent px-4 py-2 text-sm font-medium text-surface"
           >
-            Usar este estilo
+            {tr("settings.useStyle")}
           </button>
           {saved ? (
             <p className="mt-2 text-xs text-muted">
-              Guardado. La próxima apertura lo vuelve a leer.
+              {tr("settings.savedNext")}
             </p>
           ) : null}
         </section>
         <section className="mt-8">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Aplicaciones externas
+            {tr("settings.apps")}
           </h2>
-          <p className="mt-2 text-sm text-muted">
-            File usa estas aplicaciones de macOS para el editor y la terminal.
-            La lista es lo que hay instalado.
-          </p>
+          <p className="mt-2 text-sm text-muted">{tr("settings.appsLead")}</p>
           {appsError ? (
             <p className="mt-3 text-sm text-warn">{appsError}</p>
           ) : null}
@@ -305,22 +349,19 @@ export function SettingsPage() {
             }}
             className="mt-4 rounded border border-line px-4 py-2 text-sm"
           >
-            Guardar aplicaciones
+            {tr("settings.saveApps")}
           </button>
           {appsSaved ? (
             <p className="mt-2 text-xs text-muted">
-              El menú File usará estas aplicaciones.
+              {tr("settings.appsSaved")}
             </p>
           ) : null}
         </section>
         <section className="mt-8">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Mensajes con IA
+            {tr("settings.ai")}
           </h2>
-          <p className="mt-2 text-sm text-muted">
-            La chispa del commit pide el mensaje a los proveedores marcados. Si
-            hay más de uno, eliges cuál usar.
-          </p>
+          <p className="mt-2 text-sm text-muted">{tr("settings.aiLead")}</p>
           {aiError ? <p className="mt-3 text-sm text-warn">{aiError}</p> : null}
           <label className="mt-3 flex items-center gap-2 text-sm">
             <input
@@ -334,7 +375,7 @@ export function SettingsPage() {
                 setAiSaved(false);
               }}
             />
-            Generar mensajes
+            {tr("settings.aiGenerate")}
           </label>
           <div className="mt-3 grid gap-2">
             {COMMIT_AGENTS.map((agent) => (
@@ -366,23 +407,17 @@ export function SettingsPage() {
             }}
             className="mt-4 rounded border border-line px-4 py-2 text-sm"
           >
-            Guardar mensajes
+            {tr("settings.saveAi")}
           </button>
           {aiSaved ? (
-            <p className="mt-2 text-xs text-muted">
-              La chispa usará estos proveedores.
-            </p>
+            <p className="mt-2 text-xs text-muted">{tr("settings.aiSaved")}</p>
           ) : null}
         </section>
         <section className="mt-8">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Disposición
+            {tr("settings.layout")}
           </h2>
-          <p className="mt-2 text-sm text-muted">
-            Cada repositorio vuelve a ramas, historial y cambios, con la
-            terminal abajo. Las disposiciones guardadas junto a Ajustes se
-            conservan.
-          </p>
+          <p className="mt-2 text-sm text-muted">{tr("settings.layoutLead")}</p>
           <button
             type="button"
             onClick={() => {
@@ -391,11 +426,11 @@ export function SettingsPage() {
             }}
             className="mt-4 rounded border border-line px-4 py-2 text-sm"
           >
-            Reiniciar posiciones
+            {tr("settings.resetLayout")}
           </button>
           {layoutReset ? (
             <p className="mt-2 text-xs text-muted">
-              Listo. Al abrir un repositorio quedan en su sitio.
+              {tr("settings.layoutReset")}
             </p>
           ) : null}
         </section>
@@ -404,10 +439,12 @@ export function SettingsPage() {
       <section className="order-1 flex min-h-0 min-w-0 flex-1 flex-col px-4 pt-4 pb-3 lg:order-2">
         <div className="mb-3 flex items-baseline justify-between gap-3">
           <h2 className="text-xs font-semibold tracking-wide text-muted uppercase">
-            Vista previa
+            {tr("settings.preview")}
           </h2>
           <p className="truncate text-xs text-muted">
-            {draft.name} · app completa
+            {tr("settings.previewApp", {
+              name: styleTitle(draft.id),
+            })}
           </p>
         </div>
         <div className="min-h-0 flex-1">
@@ -416,6 +453,31 @@ export function SettingsPage() {
       </section>
     </main>
   );
+}
+
+const STYLE_ICONS = {
+  cyberpunk: Cpu,
+  hacker: Terminal,
+  linux: Monitor,
+  anthropic: Feather,
+  openai: Hexagon,
+  xspace: Rocket,
+  pokemon: Star,
+} as const;
+
+function StyleMark({ id }: { id: string }) {
+  const Icon = STYLE_ICONS[id as keyof typeof STYLE_ICONS];
+  if (!Icon) {
+    return null;
+  }
+  return <Icon size={14} className="shrink-0 text-accent" />;
+}
+
+function styleTitle(id: string): string {
+  if (id === "hydra") {
+    return "Hydra";
+  }
+  return t(`style.${id}.name` as MessageKey);
 }
 
 function toColorInput(accent: string): string {
@@ -438,6 +500,7 @@ function AppChoiceField({
   onBrowse: () => void;
 }) {
   const choices = appChoices(stored, detected, ready);
+  const tr = useT();
   return (
     <div className="grid gap-2">
       <label className="text-xs text-muted">
@@ -459,7 +522,7 @@ function AppChoiceField({
         onClick={onBrowse}
         className="w-fit rounded border border-line px-3 py-1.5 text-xs"
       >
-        Otra aplicación…
+        {tr("settings.otherApp")}
       </button>
     </div>
   );

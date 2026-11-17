@@ -1,11 +1,15 @@
 import type {
+  AddWorktreeRequest,
   BranchRef,
   CommitAuthor,
   CommitDiff,
   CommitMessageCandidate,
   CommitPage,
+  CommitProposal,
   GitPort,
+  LinkedWorktree,
   RepositoryInfo,
+  ShowDiffRequest,
   StashEntry,
   WorkDiff,
   WorkingTreeStatus,
@@ -114,5 +118,32 @@ export const tauriGit: GitPort = {
   },
   dropStash(path, index) {
     return invoke<void>("drop_stash", { path, index });
+  },
+  listWorktrees(path) {
+    return invoke<LinkedWorktree[]>("list_worktrees", { path });
+  },
+  readCommitProposal(path) {
+    return invoke<CommitProposal | null>("read_commit_proposal", { path });
+  },
+  takeShowDiff(path) {
+    return invoke<ShowDiffRequest | null>("take_show_diff", { path });
+  },
+  addWorktree(path, request: AddWorktreeRequest) {
+    return invoke<RepositoryInfo>("add_worktree", {
+      path,
+      directory: request.directory,
+      branch: request.branch,
+      sha: request.sha,
+      createBranch: request.createBranch,
+    });
+  },
+  removeWorktree(path, worktreePath, force) {
+    return invoke<void>("remove_worktree", { path, worktreePath, force });
+  },
+  unlockWorktree(path, worktreePath) {
+    return invoke<void>("unlock_worktree", { path, worktreePath });
+  },
+  pruneWorktrees(path) {
+    return invoke<void>("prune_worktrees", { path });
   },
 };

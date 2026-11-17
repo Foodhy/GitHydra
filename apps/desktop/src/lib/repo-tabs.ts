@@ -17,6 +17,39 @@ export function tabName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+export function worktreeTabName(
+  entry: { path: string; branch: string | null; isDetached: boolean },
+  copies: { path: string }[],
+): string {
+  const base = tabName(entry.path);
+  const collision = copies.some(
+    (other) => other.path !== entry.path && tabName(other.path) === base,
+  );
+  if (!collision) {
+    return base;
+  }
+  if (!entry.isDetached && entry.branch) {
+    return `${base} · ${entry.branch}`;
+  }
+  const parts = entry.path.split("/").filter(Boolean);
+  const parent = parts.length >= 2 ? parts[parts.length - 2] : "";
+  return parent ? `${parent}/${base}` : base;
+}
+
+export function renamePath(
+  state: TabState,
+  path: string,
+  name: string,
+): TabState {
+  if (!state.tabs.some((tab) => tab.path === path && tab.name !== name)) {
+    return state;
+  }
+  return {
+    ...state,
+    tabs: state.tabs.map((tab) => (tab.path === path ? { ...tab, name } : tab)),
+  };
+}
+
 export function initialTabs(): TabState {
   return {
     tabs: [{ id: "inicio", path: null, name: "Inicio" }],

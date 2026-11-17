@@ -3,6 +3,8 @@ import {
   pinScript,
   putScript,
   removeScript,
+  SCRIPT_ICONS,
+  type ScriptIcon,
 } from "@githydra/contracts";
 import { Pin, Play, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -13,6 +15,7 @@ import {
 } from "../../lib/project-scripts";
 import { pushRun } from "../terminal/run";
 import { loadTerminals, type TerminalTab } from "../terminal/sessions";
+import { SCRIPT_ICON } from "./script-icons";
 
 export function ScriptsPanel({
   path,
@@ -27,6 +30,7 @@ export function ScriptsPanel({
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
+  const [icon, setIcon] = useState<ScriptIcon | null>(null);
   const [menu, setMenu] = useState<{
     command: string;
     tabs: TerminalTab[];
@@ -67,7 +71,7 @@ export function ScriptsPanel({
     if (!book) {
       return;
     }
-    const next = putScript(book, name.trim(), command.trim());
+    const next = putScript(book, name.trim(), command.trim(), icon);
     if ("error" in next) {
       setError(next.error);
       return;
@@ -76,6 +80,7 @@ export function ScriptsPanel({
       await store(next.book);
       setName("");
       setCommand("");
+      setIcon(null);
     } catch (reason: unknown) {
       setError(toGitClientError(reason).message);
     }
@@ -143,7 +148,10 @@ export function ScriptsPanel({
                   <Pin size={13} />
                 </button>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs text-text">{script}</p>
+                  <p className="flex min-w-0 items-center gap-1 truncate text-xs text-text">
+                    <ScriptMark name={book?.icons[script]} />
+                    <span className="truncate">{script}</span>
+                  </p>
                   <p className="truncate font-mono text-[11px] text-muted">
                     {book?.scripts[script]}
                   </p>
@@ -205,6 +213,43 @@ export function ScriptsPanel({
           onChange={(event) => setCommand(event.target.value)}
           className="rounded border border-line bg-transparent px-2 py-1 font-mono text-xs outline-none"
         />
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[11px] text-muted">Icono</span>
+          <button
+            type="button"
+            aria-label="Sin icono"
+            aria-pressed={icon === null}
+            title="Sin icono"
+            onClick={() => setIcon(null)}
+            className={`rounded px-1.5 py-0.5 text-[11px] ${
+              icon === null
+                ? "bg-surface-overlay text-text"
+                : "text-muted hover:bg-surface-overlay"
+            }`}
+          >
+            —
+          </button>
+          {SCRIPT_ICONS.map((id) => {
+            const Icon = SCRIPT_ICON[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-label={id}
+                aria-pressed={icon === id}
+                title={id}
+                onClick={() => setIcon(id)}
+                className={`rounded p-1 ${
+                  icon === id
+                    ? "bg-surface-overlay text-text"
+                    : "text-muted hover:bg-surface-overlay hover:text-text"
+                }`}
+              >
+                <Icon size={13} />
+              </button>
+            );
+          })}
+        </div>
         <button
           type="submit"
           className="rounded bg-accent px-2 py-1 text-xs font-medium text-surface"
@@ -249,4 +294,12 @@ export function ScriptsPanel({
       ) : null}
     </section>
   );
+}
+
+function ScriptMark({ name }: { name: ScriptIcon | undefined }) {
+  if (!name) {
+    return null;
+  }
+  const Icon = SCRIPT_ICON[name];
+  return <Icon size={12} className="shrink-0 text-muted" />;
 }

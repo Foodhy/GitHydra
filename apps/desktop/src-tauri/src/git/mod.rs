@@ -4,8 +4,11 @@ pub mod files;
 
 use chrono::{DateTime, FixedOffset};
 pub use error::GitError;
-use git2::{BranchType, Delta, DiffOptions, Repository, Sort, StashFlags, Status, StatusOptions};
-use serde::Serialize;
+use git2::{
+    BranchType, Delta, DiffOptions, Repository, Sort, StashFlags, Status, StatusOptions,
+    WorktreeAddOptions, WorktreeLockStatus, WorktreePruneOptions,
+};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::io::Write;
@@ -18,9 +21,7 @@ use std::time::{Duration, Instant};
 static REPO_LOCKS: Mutex<Option<HashMap<String, Arc<Mutex<()>>>>> = Mutex::new(None);
 
 pub fn with_repo<T>(path: &str, action: impl FnOnce() -> T) -> T {
-    let key = std::fs::canonicalize(path)
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| path.trim().to_string());
+    let key = lock_key(path);
     let mutex = {
         let mut slots = REPO_LOCKS.lock().expect("repo locks");
         let slots = slots.get_or_insert_with(HashMap::new);
@@ -31,6 +32,17 @@ pub fn with_repo<T>(path: &str, action: impl FnOnce() -> T) -> T {
     };
     let _guard = mutex.lock().expect("repo lock");
     action()
+}
+
+fn lock_key(path: &str) -> String {
+    if let Ok(repo) = discover(path)
+        && let Ok(common) = canonical_common(&repo)
+    {
+        return common.to_string_lossy().into_owned();
+    }
+    std::fs::canonicalize(path)
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.trim().to_string())
 }
 
 pub struct WatchRoot {
@@ -191,11 +203,7 @@ pub struct StagedCommitPrompt {
 pub fn open_repository(path: &str) -> Result<RepositoryInfo, GitError> {
     let repo = discover(path)?;
     let root = repo_root(&repo)?;
-    let name = root
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("repository")
-        .to_string();
+    let copies = collect_worktrees(&repo).unwrap_or_default();
 
     let head = match repo.head() {
         Ok(head) => Some(head),
@@ -213,6 +221,7 @@ pub fn open_repository(path: &str) -> Result<RepositoryInfo, GitError> {
         head.as_ref()
             .and_then(|reference| reference.shorthand().map(ToOwned::to_owned))
     };
+    let name = disambiguated_name(&root, current_branch.as_deref(), is_detached, &copies);
 
     Ok(RepositoryInfo {
         path: root.to_string_lossy().into_owned(),
@@ -358,13 +367,13 @@ pub fn stage_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> {
     for file in paths {
         if path_is_conflicted(&repo, file)? {
             return Err(GitError::Io(format!(
-                "Resuelve el conflicto antes de hacer stage: {file}"
+                "Resolve the conflict before staging: {file}"
             )));
         }
     }
     let workdir = repo
         .workdir()
-        .ok_or_else(|| GitError::Io("El repositorio no tiene directorio de trabajo".into()))?;
+        .ok_or_else(|| GitError::Io("The repository has no working directory".into()))?;
     let mut index = repo.index().map_err(map_git)?;
     for file in paths {
         let relative = Path::new(file);
@@ -432,7 +441,7 @@ pub fn discard_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> 
     }
     let workdir = repo
         .workdir()
-        .ok_or_else(|| GitError::Io("El repositorio no tiene directorio de trabajo".into()))?;
+        .ok_or_else(|| GitError::Io("The repository has no working directory".into()))?;
     let root = workdir
         .canonicalize()
         .map_err(|err| GitError::Io(err.to_string()))?;
@@ -452,7 +461,7 @@ pub fn discard_paths(repo_path: &str, paths: &[String]) -> Result<(), GitError> 
         };
         if !parent.starts_with(&root) {
             return Err(GitError::Io(
-                "La ruta tiene que quedar dentro del repositorio".into(),
+                "The path must stay inside the repository".into(),
             ));
         }
         let Ok(meta) = std::fs::symlink_metadata(&full) else {
@@ -476,7 +485,7 @@ fn repo_relative(file: &str) -> Result<&Path, GitError> {
             .all(|component| matches!(component, Component::Normal(_)));
     if !inside {
         return Err(GitError::Io(
-            "La ruta tiene que quedar dentro del repositorio".into(),
+            "The path must stay inside the repository".into(),
         ));
     }
     Ok(path)
@@ -758,11 +767,11 @@ pub fn create_commit(
 ) -> Result<(), GitError> {
     let summary = summary.trim();
     if summary.is_empty() {
-        return Err(GitError::Io("El resumen del commit está vacío".into()));
+        return Err(GitError::Io("The commit summary is empty".into()));
     }
     let repo = discover(repo_path)?;
     if !index_has_changes(&repo)? {
-        return Err(GitError::Io("No hay cambios en stage".into()));
+        return Err(GitError::Io("Nothing is staged".into()));
     }
     let signature = commit_signature(&repo, author_name, author_email)?;
     let mut index = repo.index().map_err(map_git)?;
@@ -785,7 +794,66 @@ pub fn create_commit(
         &parents,
     )
     .map_err(map_git)?;
+    let _ = std::fs::remove_file(repo.path().join("githydra-proposal.json"));
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitProposal {
+    pub summary: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShowDiffRequest {
+    pub file: String,
+    pub staged: bool,
+    pub missing: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShowDiffFile {
+    file: String,
+    #[serde(default)]
+    staged: bool,
+}
+
+pub fn read_commit_proposal(repo_path: &str) -> Result<Option<CommitProposal>, GitError> {
+    let repo = discover(repo_path)?;
+    let path = repo.path().join("githydra-proposal.json");
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(GitError::Io(error.to_string())),
+    };
+    let proposal = serde_json::from_str::<CommitProposal>(&text)
+        .map_err(|error| GitError::Io(format!("The commit proposal is not valid: {error}")))?;
+    Ok(Some(proposal))
+}
+
+pub fn take_show_diff(repo_path: &str) -> Result<Option<ShowDiffRequest>, GitError> {
+    let repo = discover(repo_path)?;
+    let path = repo.path().join("githydra-show.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(GitError::Io(error.to_string())),
+    };
+    let _ = std::fs::remove_file(&path);
+    let request = serde_json::from_str::<ShowDiffFile>(&text)
+        .map_err(|error| GitError::Io(format!("The diff request is not valid: {error}")))?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Io("The repository has no working directory".into()))?;
+    let full = workdir.join(&request.file);
+    let inside = full.starts_with(workdir);
+    Ok(Some(ShowDiffRequest {
+        missing: !inside || !full.is_file(),
+        file: request.file,
+        staged: request.staged,
+    }))
 }
 
 fn commit_signature(
@@ -794,17 +862,17 @@ fn commit_signature(
     author_email: &str,
 ) -> Result<git2::Signature<'static>, GitError> {
     if author_name.contains(['\n', '\r']) || author_email.contains(['\n', '\r']) {
-        return Err(GitError::Io("El autor del commit no es válido".into()));
+        return Err(GitError::Io("The commit author is not valid".into()));
     }
     let name = author_name.trim();
     let email = author_email.trim();
     if name.is_empty() && email.is_empty() {
-        return repo.signature().map_err(|_| {
-            GitError::Io("Falta user.name o user.email en la configuración de git".into())
-        });
+        return repo
+            .signature()
+            .map_err(|_| GitError::Io("Missing user.name or user.email in the git config".into()));
     }
     if name.is_empty() || email.is_empty() {
-        return Err(GitError::Io("El autor del commit no es válido".into()));
+        return Err(GitError::Io("The commit author is not valid".into()));
     }
     git2::Signature::now(name, email).map_err(map_git)
 }
@@ -845,9 +913,9 @@ pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, GitError> {
 
 pub fn save_stash(repo_path: &str, message: &str, include_untracked: bool) -> Result<(), GitError> {
     let mut repo = discover(repo_path)?;
-    let signature = repo.signature().map_err(|_| {
-        GitError::Io("Falta user.name o user.email en la configuración de git".into())
-    })?;
+    let signature = repo
+        .signature()
+        .map_err(|_| GitError::Io("Missing user.name or user.email in the git config".into()))?;
     let mut flags = StashFlags::empty();
     if include_untracked {
         flags.insert(StashFlags::INCLUDE_UNTRACKED);
@@ -899,9 +967,12 @@ pub fn checkout_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
     let branch_name = name.trim();
     let branch = repo
         .find_branch(branch_name, BranchType::Local)
-        .map_err(|_| GitError::Io(format!("No existe la rama local: {branch_name}")))?;
+        .map_err(|_| GitError::Io(format!("No local branch: {branch_name}")))?;
     if branch.is_head() {
         return Ok(());
+    }
+    if let Some(holder) = branch_holder(&repo, branch_name)? {
+        return Err(GitError::Io(occupied_message(branch_name, &holder)));
     }
     let object = branch
         .get()
@@ -910,7 +981,7 @@ pub fn checkout_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
     let refname = branch
         .get()
         .name()
-        .ok_or_else(|| GitError::Io(format!("La rama no tiene nombre: {branch_name}")))?
+        .ok_or_else(|| GitError::Io(format!("The branch has no name: {branch_name}")))?
         .to_string();
     repo.checkout_tree(&object, None).map_err(map_git)?;
     repo.set_head(&refname).map_err(map_git)
@@ -919,7 +990,7 @@ pub fn checkout_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
 pub fn create_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
     let repo = discover(repo_path)?;
     let commit = head_commit(&repo)?
-        .ok_or_else(|| GitError::Io("No hay commits para crear la rama".into()))?;
+        .ok_or_else(|| GitError::Io("No commits to create the branch".into()))?;
     create_named_branch(&repo, name, &commit)
 }
 
@@ -938,9 +1009,7 @@ fn create_named_branch(
     let branch_name = name.trim();
     let refname = format!("refs/heads/{branch_name}");
     if branch_name.is_empty() || !git2::Reference::is_valid_name(&refname) {
-        return Err(GitError::Io(format!(
-            "Nombre de rama inválido: {branch_name}"
-        )));
+        return Err(GitError::Io(format!("Invalid branch name: {branch_name}")));
     }
     repo.branch(branch_name, commit, false).map_err(map_git)?;
     Ok(())
@@ -951,9 +1020,12 @@ pub fn delete_branch(repo_path: &str, name: &str) -> Result<(), GitError> {
     let branch_name = name.trim();
     let mut branch = repo
         .find_branch(branch_name, BranchType::Local)
-        .map_err(|_| GitError::Io(format!("No existe la rama local: {branch_name}")))?;
+        .map_err(|_| GitError::Io(format!("No local branch: {branch_name}")))?;
     if branch.is_head() {
-        return Err(GitError::Io("No se puede borrar la rama actual".into()));
+        return Err(GitError::Io("Cannot delete the current branch".into()));
+    }
+    if let Some(holder) = branch_holder(&repo, branch_name)? {
+        return Err(GitError::Io(occupied_message(branch_name, &holder)));
     }
     branch.delete().map_err(map_git)
 }
@@ -964,14 +1036,14 @@ pub fn rename_branch(repo_path: &str, name: &str, next_name: &str) -> Result<(),
     let next = next_name.trim();
     let refname = format!("refs/heads/{next}");
     if next.is_empty() || !git2::Reference::is_valid_name(&refname) {
-        return Err(GitError::Io(format!("Nombre de rama inválido: {next}")));
+        return Err(GitError::Io(format!("Invalid branch name: {next}")));
     }
     if repo.find_branch(next, BranchType::Local).is_ok() {
-        return Err(GitError::Io(format!("Ya existe la rama {next}")));
+        return Err(GitError::Io(format!("Branch {next} already exists")));
     }
     let mut branch = repo
         .find_branch(current, BranchType::Local)
-        .map_err(|_| GitError::Io(format!("No existe la rama local: {current}")))?;
+        .map_err(|_| GitError::Io(format!("No local branch: {current}")))?;
     branch.rename(next, false).map_err(map_git)?;
     Ok(())
 }
@@ -981,13 +1053,11 @@ pub fn set_upstream(repo_path: &str, name: &str, upstream: &str) -> Result<(), G
     let branch_name = name.trim();
     let upstream_name = upstream.trim();
     if !upstream_name.contains('/') {
-        return Err(GitError::Io(
-            "El upstream se escribe como origen/rama".into(),
-        ));
+        return Err(GitError::Io("Write the upstream as origin/branch".into()));
     }
     let mut branch = repo
         .find_branch(branch_name, BranchType::Local)
-        .map_err(|_| GitError::Io(format!("No existe la rama local: {branch_name}")))?;
+        .map_err(|_| GitError::Io(format!("No local branch: {branch_name}")))?;
     branch.set_upstream(Some(upstream_name)).map_err(map_git)?;
     Ok(())
 }
@@ -997,7 +1067,7 @@ pub fn create_tag(repo_path: &str, sha: &str, name: &str, message: &str) -> Resu
     let tag_name = name.trim();
     let refname = format!("refs/tags/{tag_name}");
     if tag_name.is_empty() || !git2::Reference::is_valid_name(&refname) {
-        return Err(GitError::Io(format!("Nombre de tag inválido: {tag_name}")));
+        return Err(GitError::Io(format!("Invalid tag name: {tag_name}")));
     }
     let oid = git2::Oid::from_str(sha.trim()).map_err(map_git)?;
     let commit = repo.find_commit(oid).map_err(map_git)?;
@@ -1007,7 +1077,7 @@ pub fn create_tag(repo_path: &str, sha: &str, name: &str, message: &str) -> Resu
             .map_err(map_git)?;
     } else {
         let signature = repo.signature().map_err(|_| {
-            GitError::Io("Falta user.name o user.email en la configuración de git".into())
+            GitError::Io("Missing user.name or user.email in the git config".into())
         })?;
         repo.tag(tag_name, commit.as_object(), &signature, note, false)
             .map_err(map_git)?;
@@ -1042,7 +1112,7 @@ pub fn pull(repo_path: &str) -> Result<(), GitError> {
             &format!("{remote_name}/{remote_branch}"),
             BranchType::Remote,
         )
-        .map_err(|_| GitError::Io("La rama no tiene upstream".into()))?;
+        .map_err(|_| GitError::Io("The branch has no upstream".into()))?;
     let annotated = repo
         .reference_to_annotated_commit(upstream.get())
         .map_err(map_git)?;
@@ -1052,7 +1122,7 @@ pub fn pull(repo_path: &str) -> Result<(), GitError> {
     }
     if !analysis.is_fast_forward() {
         return Err(GitError::Io(
-            "Hace falta un merge. Esta versión solo avanza si es fast-forward.".into(),
+            "A merge is required. This version only moves forward on a fast-forward.".into(),
         ));
     }
     let commit = repo.find_commit(annotated.id()).map_err(map_git)?;
@@ -1072,7 +1142,7 @@ pub fn push(repo_path: &str) -> Result<(), GitError> {
     let (local, remote_name, remote_branch) = upstream_parts(&repo)?;
     let mut remote = repo
         .find_remote(&remote_name)
-        .map_err(|_| GitError::Io(format!("No existe el remoto {remote_name}")))?;
+        .map_err(|_| GitError::Io(format!("No remote {remote_name}")))?;
     let refspec = format!("refs/heads/{local}:refs/heads/{remote_branch}");
     let mut options = git2::PushOptions::new();
     options.remote_callbacks(remote_callbacks());
@@ -1082,11 +1152,11 @@ pub fn push(repo_path: &str) -> Result<(), GitError> {
 pub fn clone_repository(url: &str, directory: &str) -> Result<RepositoryInfo, GitError> {
     let url = url.trim();
     if url.is_empty() {
-        return Err(GitError::Io("La URL está vacía".into()));
+        return Err(GitError::Io("The URL is empty".into()));
     }
     let parent = Path::new(directory.trim());
     if !parent.is_dir() {
-        return Err(GitError::Io("La carpeta de destino no existe".into()));
+        return Err(GitError::Io("The destination folder does not exist".into()));
     }
     let name = repo_name_from_url(url)?;
     let dest = parent.join(&name);
@@ -1094,7 +1164,7 @@ pub fn clone_repository(url: &str, directory: &str) -> Result<RepositoryInfo, Gi
         let mut entries = std::fs::read_dir(&dest).map_err(|err| GitError::Io(err.to_string()))?;
         if entries.next().is_some() {
             return Err(GitError::Io(format!(
-                "La carpeta ya existe y no está vacía: {}",
+                "The folder already exists and is not empty: {}",
                 dest.display()
             )));
         }
@@ -1107,7 +1177,7 @@ pub fn clone_repository(url: &str, directory: &str) -> Result<RepositoryInfo, Gi
     finish_network(builder.clone(url, &dest).map_err(map_git))?;
     let dest_path = dest
         .to_str()
-        .ok_or_else(|| GitError::Io("La ruta clonada no es UTF-8".into()))?;
+        .ok_or_else(|| GitError::Io("The cloned path is not UTF-8".into()))?;
     open_repository(dest_path)
 }
 
@@ -1115,7 +1185,7 @@ pub fn init_repository(directory: &str) -> Result<RepositoryInfo, GitError> {
     let trimmed = directory.trim();
     let path = Path::new(trimmed);
     if !path.is_dir() {
-        return Err(GitError::Io("La carpeta no existe".into()));
+        return Err(GitError::Io("The folder does not exist".into()));
     }
     if Repository::open(path).is_err() {
         Repository::init(path).map_err(map_git)?;
@@ -1130,17 +1200,17 @@ pub fn read_commit_file(repo_path: &str, sha: &str, file: &str) -> Result<String
     let tree = commit.tree().map_err(map_git)?;
     let entry = match tree.get_path(Path::new(file)) {
         Ok(entry) => entry,
-        Err(_) => return Ok(format!("El commit no tiene {file}")),
+        Err(_) => return Ok(format!("The commit has no {file}")),
     };
     let blob = match repo.find_blob(entry.id()) {
         Ok(blob) => blob,
-        Err(_) => return Ok("No se puede mostrar este archivo.".into()),
+        Err(_) => return Ok("This file cannot be shown.".into()),
     };
     if blob.is_binary() {
-        return Ok("Archivo binario, sin vista de texto.".into());
+        return Ok("Binary file, no text view.".into());
     }
     if blob.size() > FILE_BYTE_LIMIT {
-        return Ok("El archivo supera 1 MB y no se muestra.".into());
+        return Ok("The file is over 1 MB and is not shown.".into());
     }
     Ok(String::from_utf8_lossy(blob.content()).into_owned())
 }
@@ -1148,7 +1218,7 @@ pub fn read_commit_file(repo_path: &str, sha: &str, file: &str) -> Result<String
 fn fetch_remote(repo: &Repository, remote_name: &str) -> Result<(), GitError> {
     let mut remote = repo
         .find_remote(remote_name)
-        .map_err(|_| GitError::Io(format!("No existe el remoto {remote_name}")))?;
+        .map_err(|_| GitError::Io(format!("No remote {remote_name}")))?;
     let mut options = git2::FetchOptions::new();
     options.remote_callbacks(remote_callbacks());
     let specs: [&str; 0] = [];
@@ -1168,24 +1238,24 @@ fn upstream_parts(repo: &Repository) -> Result<(String, String, String), GitErro
     let head = match repo.head() {
         Ok(head) => head,
         Err(err) if err.code() == git2::ErrorCode::UnbornBranch => {
-            return Err(GitError::Io("No hay commits".into()));
+            return Err(GitError::Io("No commits".into()));
         }
         Err(err) => return Err(map_git(err)),
     };
     if !head.is_branch() {
-        return Err(GitError::Io("HEAD no está en una rama".into()));
+        return Err(GitError::Io("HEAD is not on a branch".into()));
     }
     let local = head.shorthand().unwrap_or("").to_string();
     let branch = git2::Branch::wrap(head);
     let upstream = branch
         .upstream()
-        .map_err(|_| GitError::Io("La rama no tiene upstream".into()))?;
+        .map_err(|_| GitError::Io("The branch has no upstream".into()))?;
     let full = upstream.name().map_err(map_git)?.unwrap_or("").to_string();
     let Some((remote_name, remote_branch)) = full.split_once('/') else {
-        return Err(GitError::Io("La rama no tiene upstream".into()));
+        return Err(GitError::Io("The branch has no upstream".into()));
     };
     if remote_name.is_empty() || remote_branch.is_empty() {
-        return Err(GitError::Io("La rama no tiene upstream".into()));
+        return Err(GitError::Io("The branch has no upstream".into()));
     }
     Ok((local, remote_name.to_string(), remote_branch.to_string()))
 }
@@ -1194,7 +1264,7 @@ fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed| {
         if activity::cancelled() {
-            return Err(git2::Error::from_str("Cancelado"));
+            return Err(git2::Error::from_str("Cancelled"));
         }
         if allowed.contains(git2::CredentialType::SSH_KEY) {
             let user = username_from_url.unwrap_or("git");
@@ -1209,20 +1279,20 @@ fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
                 Ok((user, password)) => {
                     return git2::Cred::userpass_plaintext(&user, &password);
                 }
-                Err(error) if error == "Cancelado" || error.contains("no respondió") => {
+                Err(error) if error == "Cancelled" || error.contains("did not respond") => {
                     return Err(git2::Error::from_str(&error));
                 }
                 Err(_) => {}
             }
         }
         if activity::cancelled() {
-            return Err(git2::Error::from_str("Cancelado"));
+            return Err(git2::Error::from_str("Cancelled"));
         }
         if allowed.contains(git2::CredentialType::DEFAULT) {
             return git2::Cred::default();
         }
         Err(git2::Error::from_str(
-            "No hay credencial. Revisa el agente SSH o git credential.",
+            "No credential. Check the SSH agent or git credential.",
         ))
     });
     callbacks.transfer_progress(|progress| {
@@ -1233,13 +1303,13 @@ fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
             && progress.received_objects() == progress.total_objects()
         {
             format!(
-                "resolviendo deltas {}/{}",
+                "resolving deltas {}/{}",
                 progress.indexed_deltas(),
                 progress.total_deltas()
             )
         } else {
             format!(
-                "{}/{} objetos",
+                "{}/{} objects",
                 progress.received_objects(),
                 progress.total_objects()
             )
@@ -1258,12 +1328,12 @@ fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
     });
     callbacks.push_transfer_progress(|current, total, _bytes| {
         if !activity::cancelled() {
-            activity::report(&format!("{current}/{total} objetos"));
+            activity::report(&format!("{current}/{total} objects"));
         }
     });
     callbacks.push_update_reference(|_reference, _status| {
         if activity::cancelled() {
-            return Err(git2::Error::from_str("Cancelado"));
+            return Err(git2::Error::from_str("Cancelled"));
         }
         Ok(())
     });
@@ -1272,7 +1342,7 @@ fn remote_callbacks() -> git2::RemoteCallbacks<'static> {
 
 fn finish_network<T>(result: Result<T, GitError>) -> Result<T, GitError> {
     if activity::cancelled() {
-        return Err(GitError::Io("Cancelado".into()));
+        return Err(GitError::Io("Cancelled".into()));
     }
     result
 }
@@ -1288,12 +1358,12 @@ fn git_credential_fill(protocol: &str, host: &str) -> Result<(String, String), S
     let mut stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "git credential no devolvió salida".to_string())?;
+        .ok_or_else(|| "git credential returned no output".to_string())?;
     {
         let mut stdin = child
             .stdin
             .take()
-            .ok_or_else(|| "git credential no acepta entrada".to_string())?;
+            .ok_or_else(|| "git credential accepts no input".to_string())?;
         stdin
             .write_all(format!("protocol={protocol}\nhost={host}\n\n").as_bytes())
             .map_err(|err| err.to_string())?;
@@ -1302,11 +1372,11 @@ fn git_credential_fill(protocol: &str, host: &str) -> Result<(String, String), S
     let status = loop {
         if activity::cancelled() {
             let _ = child.kill();
-            return Err("Cancelado".into());
+            return Err("Cancelled".into());
         }
         if started.elapsed() >= Duration::from_secs(20) {
             let _ = child.kill();
-            return Err("git credential no respondió".into());
+            return Err("git credential did not respond".into());
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -1315,7 +1385,7 @@ fn git_credential_fill(protocol: &str, host: &str) -> Result<(String, String), S
         }
     };
     if !status.success() {
-        return Err("No hay credencial".into());
+        return Err("No credential".into());
     }
     let mut text = String::new();
     stdout
@@ -1333,7 +1403,7 @@ fn git_credential_fill(protocol: &str, host: &str) -> Result<(String, String), S
     }
     match (username, password) {
         (Some(user), Some(password)) => Ok((user, password)),
-        _ => Err("No hay credencial".into()),
+        _ => Err("No credential".into()),
     }
 }
 
@@ -1357,9 +1427,7 @@ fn repo_name_from_url(url: &str) -> Result<String, GitError> {
     let last = trimmed.rsplit(['/', ':']).next().unwrap_or("");
     let name = last.strip_suffix(".git").unwrap_or(last);
     if name.is_empty() || name == "." || name == ".." || name.contains("..") {
-        return Err(GitError::Io(
-            "No se pudo leer el nombre del repositorio".into(),
-        ));
+        return Err(GitError::Io("Could not read the repository name".into()));
     }
     Ok(name.to_string())
 }
@@ -1400,7 +1468,7 @@ fn path_is_conflicted(repo: &Repository, file: &str) -> Result<bool, GitError> {
 pub fn working_tree_diff(repo_path: &str, file: &str, staged: bool) -> Result<WorkDiff, GitError> {
     let file = file.trim();
     if file.is_empty() {
-        return Err(GitError::Io("Falta la ruta del archivo".into()));
+        return Err(GitError::Io("Missing file path".into()));
     }
     let repo = discover(repo_path)?;
     let before = if staged {
@@ -1449,12 +1517,12 @@ pub fn working_tree_diff(repo_path: &str, file: &str, staged: bool) -> Result<Wo
         kind = delta_kind;
         binary = is_binary;
         patch = if is_binary {
-            "Archivo binario, sin parche de texto.\n".to_string()
+            "Binary file, no text patch.\n".to_string()
         } else {
             let raw = patch_text(&diff, index);
             if raw.len() > PATCH_BYTE_LIMIT {
                 let mut cut: String = raw.chars().take(PATCH_BYTE_LIMIT).collect();
-                cut.push_str("\nParche truncado.\n");
+                cut.push_str("\nPatch truncated.\n");
                 cut
             } else {
                 raw
@@ -1462,8 +1530,7 @@ pub fn working_tree_diff(repo_path: &str, file: &str, staged: bool) -> Result<Wo
         };
         break;
     }
-    let binary =
-        binary || before.starts_with("Archivo binario") || after.starts_with("Archivo binario");
+    let binary = binary || before.starts_with("Binary file") || after.starts_with("Binary file");
     Ok(WorkDiff {
         path: file.to_string(),
         staged,
@@ -1501,7 +1568,7 @@ fn index_file_text(repo: &Repository, file: &str) -> Result<Option<String>, GitE
 fn workdir_file_text(repo: &Repository, file: &str) -> Result<String, GitError> {
     let workdir = repo
         .workdir()
-        .ok_or_else(|| GitError::Io("El repositorio no tiene directorio de trabajo".into()))?;
+        .ok_or_else(|| GitError::Io("The repository has no working directory".into()))?;
     let full = workdir.join(file);
     if !full.is_file() {
         return Ok(missing_side());
@@ -1513,17 +1580,17 @@ fn workdir_file_text(repo: &Repository, file: &str) -> Result<String, GitError> 
 fn blob_text(repo: &Repository, id: git2::Oid) -> Result<String, GitError> {
     let blob = repo.find_blob(id).map_err(map_git)?;
     if blob.is_binary() {
-        return Ok("Archivo binario, sin vista de texto.\n".into());
+        return Ok("Binary file, no text view.\n".into());
     }
     read_limited(blob.content())
 }
 
 fn read_limited(bytes: &[u8]) -> Result<String, GitError> {
     if bytes.len() > FILE_BYTE_LIMIT {
-        return Ok("El archivo supera 1 MB y no se muestra.\n".into());
+        return Ok("The file is over 1 MB and is not shown.\n".into());
     }
     if bytes.contains(&0) {
-        return Ok("Archivo binario, sin vista de texto.\n".into());
+        return Ok("Binary file, no text view.\n".into());
     }
     Ok(String::from_utf8_lossy(bytes).into_owned())
 }
@@ -1550,18 +1617,18 @@ pub fn commit_diff(path: &str, sha: &str) -> Result<CommitDiff, GitError> {
     for index in 0..diff.deltas().len() {
         let (file_path, old_path, kind, binary) = delta_meta(&diff, index)?;
         let raw = if binary {
-            "Archivo binario, sin parche de texto.\n".to_string()
+            "Binary file, no text patch.\n".to_string()
         } else {
             patch_text(&diff, index)
         };
         let patch = if used >= PATCH_BYTE_LIMIT {
             truncated = true;
-            "Parche truncado.\n".to_string()
+            "Patch truncated.\n".to_string()
         } else if used + raw.len() > PATCH_BYTE_LIMIT {
             truncated = true;
             used = PATCH_BYTE_LIMIT;
             let mut cut: String = raw.chars().take(PATCH_BYTE_LIMIT).collect();
-            cut.push_str("\nParche truncado.\n");
+            cut.push_str("\nPatch truncated.\n");
             cut
         } else {
             used += raw.len();
@@ -1587,7 +1654,7 @@ fn delta_meta(
     index: usize,
 ) -> Result<(String, Option<String>, String, bool), GitError> {
     let Some(delta) = diff.get_delta(index) else {
-        return Err(GitError::Io("El delta del diff no existe".into()));
+        return Err(GitError::Io("The diff delta does not exist".into()));
     };
     let new_path = path_to_string(delta.new_file().path());
     let old_path = path_to_string(delta.old_file().path());
@@ -1618,18 +1685,18 @@ fn path_to_string(path: Option<&Path>) -> String {
 
 fn patch_text(diff: &git2::Diff, index: usize) -> String {
     let Ok(Some(mut patch)) = git2::Patch::from_diff(diff, index) else {
-        return "Archivo binario, sin parche de texto.\n".to_string();
+        return "Binary file, no text patch.\n".to_string();
     };
     match patch.to_buf() {
         Ok(buf) => {
             let text = String::from_utf8_lossy(&buf).into_owned();
             if text.contains("Binary files") {
-                "Archivo binario, sin parche de texto.\n".to_string()
+                "Binary file, no text patch.\n".to_string()
             } else {
                 text
             }
         }
-        Err(_) => "Archivo binario, sin parche de texto.\n".to_string(),
+        Err(_) => "Binary file, no text patch.\n".to_string(),
     }
 }
 
@@ -1648,7 +1715,7 @@ fn delta_kind(status: Delta) -> &'static str {
 pub(crate) fn discover(path: &str) -> Result<Repository, GitError> {
     let trimmed = path.trim();
     if trimmed.is_empty() || !Path::new(trimmed).exists() {
-        return Err(GitError::Io(format!("La ruta no existe: {trimmed}")));
+        return Err(GitError::Io(format!("The path does not exist: {trimmed}")));
     }
     Repository::discover(trimmed).map_err(|err| {
         if err.code() == git2::ErrorCode::NotFound {
@@ -1664,7 +1731,7 @@ fn repo_root(repo: &Repository) -> Result<PathBuf, GitError> {
         repo.path().to_path_buf()
     } else {
         repo.workdir()
-            .ok_or_else(|| GitError::Io("El repositorio no tiene directorio de trabajo".into()))?
+            .ok_or_else(|| GitError::Io("The repository has no working directory".into()))?
             .to_path_buf()
     };
     raw.canonicalize()
@@ -1729,13 +1796,13 @@ pub fn clean_commit_reply(text: &str) -> Result<CommitMessageDraft, GitError> {
         lines.pop();
     }
     let Some(first) = lines.first() else {
-        return Err(GitError::Io("El agente no devolvió un mensaje.".into()));
+        return Err(GitError::Io("The agent returned no message.".into()));
     };
     let summary = strip_wrapping_quotes(strip_reply_label(first.trim()))
         .trim()
         .to_string();
     if summary.is_empty() {
-        return Err(GitError::Io("El agente no devolvió un mensaje.".into()));
+        return Err(GitError::Io("The agent returned no message.".into()));
     }
     let mut body = lines[1..].to_vec();
     while body.first().is_some_and(|line| line.trim().is_empty()) {
@@ -1749,7 +1816,7 @@ pub fn clean_commit_reply(text: &str) -> Result<CommitMessageDraft, GitError> {
 
 fn commit_message_prompt(subjects: &[String], diff: &str) -> String {
     let history = if subjects.is_empty() {
-        "(sin commits anteriores)".to_string()
+        "(no earlier commits)".to_string()
     } else {
         subjects
             .iter()
@@ -1758,16 +1825,16 @@ fn commit_message_prompt(subjects: &[String], diff: &str) -> String {
             .join("\n")
     };
     format!(
-        "Escribe el mensaje de git para este diff en stage.\n\
-Copia el idioma y la forma de los asuntos recientes.\n\
-Una sola línea de asunto, de menos de 72 caracteres.\n\
-Añade un cuerpo corto, separado por una línea en blanco, solo si el porqué no se ve en el diff.\n\
-Responde solo con el mensaje, sin comillas, sin fences y sin explicación.\n\
+        "Write the git message for this staged diff.\n\
+Copy the language and shape of the recent subjects.\n\
+One subject line, under 72 characters.\n\
+Add a short body, separated by a blank line, only when the why is not in the diff.\n\
+Reply with the message only, no quotes, no fences, and no explanation.\n\
 \n\
-Asuntos recientes:\n\
+Recent subjects:\n\
 {history}\n\
 \n\
-Diff en stage:\n\
+Staged diff:\n\
 {diff}"
     )
 }
@@ -1786,7 +1853,7 @@ fn staged_prompt_diff(repo: &Repository) -> Result<String, GitError> {
         .map_err(map_git)?;
     if diff.deltas().len() == 0 {
         return Err(GitError::Io(
-            "No hay cambios en stage. Pasa archivos a stage antes de generar el mensaje.".into(),
+            "Nothing is staged. Stage files before generating a message.".into(),
         ));
     }
 
@@ -1800,7 +1867,7 @@ fn staged_prompt_diff(repo: &Repository) -> Result<String, GitError> {
             None => format!("{kind} {file_path}"),
         };
         let raw = patch_text(&diff, index);
-        if is_prompt_noise(&file_path) || binary || raw.starts_with("Archivo binario") {
+        if is_prompt_noise(&file_path) || binary || raw.starts_with("Binary file") {
             skipped.push(label);
             continue;
         }
@@ -1812,7 +1879,7 @@ fn staged_prompt_diff(repo: &Repository) -> Result<String, GitError> {
         let chars = raw.chars().count();
         if chars > room {
             let mut cut: String = raw.chars().take(room).collect();
-            cut.push_str("\n...[truncado]\n");
+            cut.push_str("\n...[truncated]\n");
             used += cut.chars().count();
             included.push_str(&cut);
         } else {
@@ -1824,7 +1891,7 @@ fn staged_prompt_diff(repo: &Repository) -> Result<String, GitError> {
         }
     }
     if !skipped.is_empty() {
-        included.push_str("\nArchivos sin parche de texto:\n");
+        included.push_str("\nFiles with no text patch:\n");
         for item in skipped {
             included.push_str("- ");
             included.push_str(&item);
@@ -1932,6 +1999,600 @@ fn worktree_kind(status: Status) -> Option<&'static str> {
         return Some("typechange");
     }
     None
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedWorktree {
+    pub path: String,
+    pub branch: Option<String>,
+    pub head_sha: Option<String>,
+    pub is_detached: bool,
+    pub locked: bool,
+    pub lock_reason: Option<String>,
+    pub missing: bool,
+    pub is_main: bool,
+    pub is_current: bool,
+    pub situation: String,
+}
+
+pub struct AddWorktreeRequest {
+    pub directory: String,
+    pub branch: String,
+    pub sha: Option<String>,
+    pub create_branch: bool,
+}
+
+pub fn list_worktrees(path: &str) -> Result<Vec<LinkedWorktree>, GitError> {
+    let repo = discover(path)?;
+    collect_worktrees(&repo)
+}
+
+pub fn add_worktree(path: &str, request: &AddWorktreeRequest) -> Result<RepositoryInfo, GitError> {
+    let repo = discover(path)?;
+    let branch_name = request.branch.trim();
+    if branch_name.is_empty() {
+        return Err(GitError::Io("Invalid branch name".into()));
+    }
+    let directory = canonical_dest(Path::new(request.directory.trim()));
+    if directory.as_os_str().is_empty() {
+        return Err(GitError::Io("Missing destination folder".into()));
+    }
+    let copies = collect_worktrees(&repo)?;
+    reject_inside_workdir(&copies, &directory)?;
+    if directory.exists() && !directory_is_empty(&directory)? {
+        return Err(GitError::Io(format!(
+            "The destination folder already exists: {}",
+            directory.display()
+        )));
+    }
+    let created = if request.create_branch {
+        if repo.find_branch(branch_name, BranchType::Local).is_ok() {
+            return Err(GitError::Io(format!("Branch {branch_name} already exists")));
+        }
+        let sha = request
+            .sha
+            .as_deref()
+            .map(str::trim)
+            .filter(|sha| !sha.is_empty());
+        let commit = if let Some(sha) = sha {
+            let oid = git2::Oid::from_str(sha).map_err(map_git)?;
+            repo.find_commit(oid).map_err(map_git)?
+        } else {
+            head_commit(&repo)?
+                .ok_or_else(|| GitError::Io("No commits to create the branch".into()))?
+        };
+        create_named_branch(&repo, branch_name, &commit)?;
+        true
+    } else {
+        if repo.find_branch(branch_name, BranchType::Local).is_err() {
+            return Err(GitError::Io(format!("No local branch: {branch_name}")));
+        }
+        if let Some(holder) = copies
+            .iter()
+            .find(|copy| copy.branch.as_deref() == Some(branch_name))
+        {
+            return Err(GitError::Io(occupied_message(branch_name, holder)));
+        }
+        false
+    };
+
+    let added = add_linked(&repo, &directory, branch_name);
+    if let Err(error) = added {
+        if created {
+            let _ = delete_local_branch(&repo, branch_name);
+        }
+        return Err(error);
+    }
+    let created_path = added?;
+    open_repository(&created_path.to_string_lossy())
+}
+
+pub fn remove_worktree(path: &str, worktree_path: &str, force: bool) -> Result<(), GitError> {
+    let repo = discover(path)?;
+    let main = open_main(&repo)?;
+    let wanted = canonical_dest(Path::new(worktree_path.trim()));
+    if let Some(workdir) = main.workdir()
+        && same_path(workdir, &wanted)
+    {
+        return Err(GitError::Io("The main folder cannot be removed.".into()));
+    }
+    let worktree = find_linked(&main, &wanted)?;
+    if matches!(
+        worktree.is_locked().map_err(map_git)?,
+        WorktreeLockStatus::Locked(_)
+    ) {
+        return Err(GitError::Io(
+            "It is locked. Unlock it before removing.".into(),
+        ));
+    }
+    let recorded = worktree.path().to_path_buf();
+    let missing = worktree.validate().is_err() || !recorded.exists();
+    if missing {
+        return Err(GitError::Io(
+            "The folder is gone. Prune it to free the branch.".into(),
+        ));
+    }
+    if !force && worktree_is_dirty(&recorded)? {
+        return Err(GitError::Io(format!(
+            "There are uncommitted changes in {}. Confirm again to remove it.",
+            recorded.display()
+        )));
+    }
+    let mut options = WorktreePruneOptions::new();
+    options.valid(true).working_tree(true);
+    worktree.prune(Some(&mut options)).map_err(map_git)?;
+    if recorded.exists() {
+        remove_with_git(&main, &recorded)?;
+    }
+    Ok(())
+}
+
+pub fn unlock_worktree(path: &str, worktree_path: &str) -> Result<(), GitError> {
+    let repo = discover(path)?;
+    let main = open_main(&repo)?;
+    let wanted = canonical_dest(Path::new(worktree_path.trim()));
+    let worktree = find_linked(&main, &wanted)?;
+    if matches!(
+        worktree.is_locked().map_err(map_git)?,
+        WorktreeLockStatus::Unlocked
+    ) {
+        return Ok(());
+    }
+    worktree.unlock().map_err(map_git)
+}
+
+pub fn prune_worktrees(path: &str) -> Result<(), GitError> {
+    let repo = discover(path)?;
+    let main = open_main(&repo)?;
+    let names = main.worktrees().map_err(map_git)?;
+    for name in names.iter().flatten() {
+        let worktree = main.find_worktree(name).map_err(map_git)?;
+        let mut probe = WorktreePruneOptions::new();
+        if !worktree.is_prunable(Some(&mut probe)).unwrap_or(false) {
+            continue;
+        }
+        let mut options = WorktreePruneOptions::new();
+        worktree.prune(Some(&mut options)).map_err(map_git)?;
+    }
+    Ok(())
+}
+
+fn collect_worktrees(repo: &Repository) -> Result<Vec<LinkedWorktree>, GitError> {
+    let current = repo_root(repo)?;
+    let main = open_main(repo)?;
+    let mut copies = Vec::new();
+    if let Some(workdir) = main.workdir() {
+        let root = workdir
+            .canonicalize()
+            .unwrap_or_else(|_| workdir.to_path_buf());
+        let (branch, head_sha, is_detached) = read_repo_head(&main)?;
+        let is_current = same_path(&root, &current);
+        copies.push(described_worktree(CopyParts {
+            path: root,
+            branch,
+            head_sha,
+            is_detached,
+            locked: false,
+            lock_reason: None,
+            missing: false,
+            is_main: true,
+            is_current,
+        }));
+    }
+    let common = canonical_common(&main)?;
+    let names = main.worktrees().map_err(map_git)?;
+    for name in names.iter().flatten() {
+        let worktree = main.find_worktree(name).map_err(map_git)?;
+        let recorded = worktree.path().to_path_buf();
+        let missing = worktree.validate().is_err() || !recorded.exists();
+        let (locked, lock_reason) = match worktree.is_locked().map_err(map_git)? {
+            WorktreeLockStatus::Unlocked => (false, None),
+            WorktreeLockStatus::Locked(reason) => (true, reason.filter(|text| !text.is_empty())),
+        };
+        let path = if missing {
+            recorded
+        } else {
+            recorded.canonicalize().unwrap_or(recorded)
+        };
+        let (branch, head_sha, is_detached) = if missing {
+            read_worktree_head_file(&common, name, &main)?
+        } else {
+            match Repository::open(&path) {
+                Ok(linked) => read_repo_head(&linked)?,
+                Err(_) => read_worktree_head_file(&common, name, &main)?,
+            }
+        };
+        let is_current = !missing && same_path(&path, &current);
+        copies.push(described_worktree(CopyParts {
+            path,
+            branch,
+            head_sha,
+            is_detached,
+            locked,
+            lock_reason,
+            missing,
+            is_main: false,
+            is_current,
+        }));
+    }
+    Ok(copies)
+}
+
+struct CopyParts {
+    path: PathBuf,
+    branch: Option<String>,
+    head_sha: Option<String>,
+    is_detached: bool,
+    locked: bool,
+    lock_reason: Option<String>,
+    missing: bool,
+    is_main: bool,
+    is_current: bool,
+}
+
+fn described_worktree(copy: CopyParts) -> LinkedWorktree {
+    let situation = worktree_situation(
+        copy.locked,
+        copy.lock_reason.as_deref(),
+        copy.missing,
+        copy.is_detached,
+        copy.is_main,
+        copy.is_current,
+        copy.head_sha.as_deref(),
+    );
+    LinkedWorktree {
+        path: copy.path.to_string_lossy().into_owned(),
+        branch: copy.branch,
+        head_sha: copy.head_sha,
+        is_detached: copy.is_detached,
+        locked: copy.locked,
+        lock_reason: copy.lock_reason,
+        missing: copy.missing,
+        is_main: copy.is_main,
+        is_current: copy.is_current,
+        situation,
+    }
+}
+
+fn worktree_situation(
+    locked: bool,
+    lock_reason: Option<&str>,
+    missing: bool,
+    is_detached: bool,
+    is_main: bool,
+    is_current: bool,
+    head_sha: Option<&str>,
+) -> String {
+    if locked && missing {
+        return "Locked and the folder is gone. Prune skips it: unlock, then prune. If the disk is just unmounted, do not unlock.".into();
+    }
+    if locked {
+        return match lock_reason.filter(|reason| !reason.is_empty()) {
+            Some(reason) => format!("Locked: {reason}. Remove fails until you unlock."),
+            None => "Locked. Remove fails until you unlock.".into(),
+        };
+    }
+    if missing {
+        return "The folder is gone. The branch is still checked out. Prune frees it.".into();
+    }
+    if is_current {
+        return "This is the open folder.".into();
+    }
+    if is_detached {
+        let sha = head_sha.unwrap_or("");
+        let short: String = sha.chars().take(7).collect();
+        return format!("Detached HEAD at {short}.");
+    }
+    if is_main {
+        return "Main folder. It cannot be removed.".into();
+    }
+    "Another folder of the same history.".into()
+}
+
+fn occupied_message(branch: &str, holder: &LinkedWorktree) -> String {
+    if holder.locked && holder.missing {
+        return format!(
+            "{branch} is still checked out by a locked copy whose folder is gone ({}). Unlock it, then prune.",
+            holder.path
+        );
+    }
+    if holder.missing {
+        return format!(
+            "{branch} is still checked out by a missing copy at {}. Prune it to free the branch.",
+            holder.path
+        );
+    }
+    format!("{branch} is checked out at {}", holder.path)
+}
+
+fn branch_holder(repo: &Repository, branch: &str) -> Result<Option<LinkedWorktree>, GitError> {
+    let current = repo_root(repo)?;
+    let copies = collect_worktrees(repo)?;
+    Ok(copies.into_iter().find(|copy| {
+        copy.branch.as_deref() == Some(branch) && !same_path(Path::new(&copy.path), &current)
+    }))
+}
+
+fn add_linked(repo: &Repository, directory: &Path, branch_name: &str) -> Result<PathBuf, GitError> {
+    let main = open_main(repo)?;
+    if let Some(parent) = directory.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| GitError::Io(err.to_string()))?;
+    }
+    let names = main.worktrees().map_err(map_git)?;
+    let existing: Vec<String> = names.iter().flatten().map(ToOwned::to_owned).collect();
+    let admin = worktree_admin_name(directory, branch_name, &existing);
+    let found = main
+        .find_branch(branch_name, BranchType::Local)
+        .map_err(|_| GitError::Io(format!("No local branch: {branch_name}")))?;
+    let reference = found.into_reference();
+    let mut options = WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    main.worktree(&admin, directory, Some(&options))
+        .map_err(map_git)?;
+    Ok(directory.to_path_buf())
+}
+
+fn worktree_admin_name(directory: &Path, branch: &str, existing: &[String]) -> String {
+    let raw = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(branch);
+    let mut name: String = raw
+        .chars()
+        .map(|char| {
+            if char == '/' || char == '\\' {
+                '-'
+            } else {
+                char
+            }
+        })
+        .collect();
+    if name.is_empty() || name == "." || name == ".." {
+        name = branch.replace('/', "-");
+    }
+    let base = name.clone();
+    let mut suffix = 2;
+    while existing.iter().any(|item| item == &name) {
+        name = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    name
+}
+
+fn delete_local_branch(repo: &Repository, name: &str) -> Result<(), GitError> {
+    let mut branch = repo.find_branch(name, BranchType::Local).map_err(map_git)?;
+    branch.delete().map_err(map_git)
+}
+
+fn find_linked(main: &Repository, wanted: &Path) -> Result<git2::Worktree, GitError> {
+    let names = main.worktrees().map_err(map_git)?;
+    for name in names.iter().flatten() {
+        let worktree = main.find_worktree(name).map_err(map_git)?;
+        if same_path(worktree.path(), wanted) {
+            return Ok(worktree);
+        }
+    }
+    Err(GitError::Io(format!(
+        "Not in the copy list: {}",
+        wanted.display()
+    )))
+}
+
+fn reject_inside_workdir(copies: &[LinkedWorktree], directory: &Path) -> Result<(), GitError> {
+    for copy in copies {
+        if copy.missing {
+            continue;
+        }
+        let root = PathBuf::from(&copy.path);
+        if !directory.starts_with(&root) || directory == root {
+            continue;
+        }
+        let repo = Repository::open(&root).map_err(map_git)?;
+        let relative = directory
+            .strip_prefix(&root)
+            .map_err(|err| GitError::Io(err.to_string()))?;
+        let ignored = repo.is_path_ignored(relative).unwrap_or(false);
+        if !ignored {
+            return Err(GitError::Io(
+                "The destination is inside the working tree. Choose a sibling folder, or an ignored path.".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn directory_is_empty(path: &Path) -> Result<bool, GitError> {
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    let mut entries = std::fs::read_dir(path).map_err(|err| GitError::Io(err.to_string()))?;
+    Ok(entries.next().is_none())
+}
+
+fn worktree_is_dirty(path: &Path) -> Result<bool, GitError> {
+    let repo = Repository::open(path).map_err(map_git)?;
+    let mut options = StatusOptions::new();
+    options
+        .include_untracked(true)
+        .include_ignored(false)
+        .recurse_untracked_dirs(false);
+    let statuses = repo.statuses(Some(&mut options)).map_err(map_git)?;
+    Ok(!statuses.is_empty())
+}
+
+fn remove_with_git(main: &Repository, directory: &Path) -> Result<(), GitError> {
+    let cwd = main.workdir().unwrap_or_else(|| main.path());
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["worktree", "remove", "--force"])
+        .arg(directory)
+        .output()
+        .map_err(|err| GitError::Io(err.to_string()))?;
+    if output.status.success() && !directory.exists() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        Err(GitError::Io(format!(
+            "Could not remove the folder {}",
+            directory.display()
+        )))
+    } else {
+        Err(GitError::Io(stderr))
+    }
+}
+
+fn open_main(repo: &Repository) -> Result<Repository, GitError> {
+    if repo.is_worktree() {
+        Repository::open(canonical_common(repo)?).map_err(map_git)
+    } else {
+        let root = repo_root(repo)?;
+        Repository::open(&root).map_err(map_git)
+    }
+}
+
+fn canonical_common(repo: &Repository) -> Result<PathBuf, GitError> {
+    let gitdir = repo.path().to_path_buf();
+    let common_raw = repo.commondir();
+    let common = if common_raw.is_absolute() {
+        common_raw.to_path_buf()
+    } else {
+        gitdir.join(common_raw)
+    };
+    std::fs::canonicalize(&common).map_err(|err| GitError::Io(err.to_string()))
+}
+
+fn read_repo_head(repo: &Repository) -> Result<(Option<String>, Option<String>, bool), GitError> {
+    let is_detached = repo.head_detached().unwrap_or(false);
+    let head = match repo.head() {
+        Ok(head) => Some(head),
+        Err(err) if err.code() == git2::ErrorCode::UnbornBranch => None,
+        Err(err) => return Err(map_git(err)),
+    };
+    let head_sha = head
+        .as_ref()
+        .and_then(|reference| reference.target().map(|oid| oid.to_string()));
+    let branch = if is_detached {
+        None
+    } else {
+        head.as_ref()
+            .and_then(|reference| reference.shorthand().map(ToOwned::to_owned))
+    };
+    Ok((branch, head_sha, is_detached))
+}
+
+fn read_worktree_head_file(
+    common: &Path,
+    name: &str,
+    main: &Repository,
+) -> Result<(Option<String>, Option<String>, bool), GitError> {
+    let text = std::fs::read_to_string(common.join("worktrees").join(name).join("HEAD"))
+        .unwrap_or_default();
+    let text = text.trim();
+    if let Some(reference) = text.strip_prefix("ref: ") {
+        let reference = reference.trim();
+        let branch = reference
+            .strip_prefix("refs/heads/")
+            .unwrap_or(reference)
+            .to_string();
+        let sha = main
+            .find_reference(reference)
+            .ok()
+            .and_then(|found| found.target())
+            .map(|oid| oid.to_string());
+        return Ok((Some(branch), sha, false));
+    }
+    if text.len() >= 7 {
+        return Ok((None, Some(text.to_string()), true));
+    }
+    Ok((None, None, true))
+}
+
+fn disambiguated_name(
+    root: &Path,
+    branch: Option<&str>,
+    detached: bool,
+    copies: &[LinkedWorktree],
+) -> String {
+    let base = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repository")
+        .to_string();
+    let collision = copies.iter().any(|copy| {
+        let other = Path::new(&copy.path);
+        other != root && file_name(other) == base
+    });
+    if !collision {
+        return base;
+    }
+    if !detached && let Some(branch) = branch {
+        return format!("{base} · {branch}");
+    }
+    let parent = root
+        .parent()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if parent.is_empty() {
+        base
+    } else {
+        format!("{parent}/{base}")
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repository")
+        .to_string()
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => normalize_lexical(left) == normalize_lexical(right),
+    }
+}
+
+fn canonical_dest(path: &Path) -> PathBuf {
+    let lexical = if path.is_absolute() {
+        normalize_lexical(path)
+    } else {
+        normalize_lexical(&std::env::current_dir().unwrap_or_default().join(path))
+    };
+    let mut cursor = lexical.clone();
+    let mut suffix = Vec::new();
+    while !cursor.exists() {
+        let Some(name) = cursor.file_name().map(ToOwned::to_owned) else {
+            break;
+        };
+        suffix.push(name);
+        if !cursor.pop() {
+            break;
+        }
+    }
+    let mut canon = std::fs::canonicalize(&cursor).unwrap_or(cursor);
+    for name in suffix.iter().rev() {
+        canon.push(name);
+    }
+    canon
+}
+
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2348,9 +3009,9 @@ mod tests {
         assert!(staged.prompt.contains("README.md"));
         assert!(staged.prompt.contains("+dos"));
         assert!(staged.prompt.contains("Cargo.lock"));
-        assert!(staged.prompt.contains("sin parche de texto"));
+        assert!(staged.prompt.contains("no text patch"));
         assert!(!staged.prompt.contains("LOCKTOKEN-NO-DEBE-SALIR"));
-        assert!(staged.prompt.contains("...[truncado]"));
+        assert!(staged.prompt.contains("...[truncated]"));
         assert!(!staged.prompt.contains("TAILTOKEN"));
 
         let empty = scratch_dir();
@@ -2453,5 +3114,250 @@ mod tests {
         stage_paths(path, &["README.md".to_string()]).expect("stage");
         let invalid = create_commit(path, "Malo", "", "linea\n", "a@b.c").expect_err("autor");
         assert_eq!(invalid.code(), "IO_ERROR");
+    }
+
+    fn init_repo(scratch: &Scratch) -> PathBuf {
+        let repo_dir = scratch.0.join("repo");
+        fs::create_dir_all(&repo_dir).expect("repo");
+        let repo = GitRepository::init(&repo_dir).expect("init");
+        fs::write(repo_dir.join("README.md"), "uno\n").expect("write");
+        commit_all(&repo, "first");
+        repo_dir
+    }
+
+    #[test]
+    fn worktree_add_lists_blocks_checkout_and_removes() {
+        let scratch = scratch_dir();
+        let repo_dir = init_repo(&scratch);
+        let path = repo_dir.to_str().unwrap();
+        let sibling = scratch.0.join("repo-prueba");
+        let created = add_worktree(
+            path,
+            &AddWorktreeRequest {
+                directory: sibling.to_string_lossy().into_owned(),
+                branch: "prueba".into(),
+                sha: None,
+                create_branch: true,
+            },
+        )
+        .expect("alta");
+        assert_eq!(created.current_branch.as_deref(), Some("prueba"));
+        assert!(sibling.exists());
+        assert_ne!(created.path, path);
+
+        let listed = list_worktrees(path).expect("lista");
+        assert!(listed.iter().any(|copy| {
+            copy.is_main && copy.is_current && copy.situation.contains("open folder")
+        }));
+        let prueba = listed
+            .iter()
+            .find(|copy| copy.branch.as_deref() == Some("prueba"))
+            .expect("prueba");
+        assert!(prueba.situation.contains("same history"));
+
+        let checkout = checkout_branch(path, "prueba").expect_err("ocupada");
+        let checkout_text = checkout.to_string();
+        assert!(checkout_text.contains("prueba is checked out at"));
+        assert!(checkout_text.contains(&prueba.path));
+        let deleted = delete_branch(path, "prueba").expect_err("borrar ocupada");
+        assert!(deleted.to_string().contains("prueba is checked out at"));
+
+        fs::write(sibling.join("extra.txt"), "x\n").expect("dirty");
+        let dirty = remove_worktree(path, &prueba.path, false).expect_err("sin force");
+        assert!(dirty.to_string().contains("Confirm again"));
+        assert!(sibling.exists());
+        remove_worktree(path, &prueba.path, true).expect("quitar");
+        assert!(!sibling.exists());
+        delete_branch(path, "prueba").expect("rama libre");
+    }
+
+    #[test]
+    fn pruning_a_deleted_folder_frees_the_branch() {
+        let scratch = scratch_dir();
+        let repo_dir = init_repo(&scratch);
+        let path = repo_dir.to_str().unwrap();
+        let sibling = scratch.0.join("repo-ausente");
+        add_worktree(
+            path,
+            &AddWorktreeRequest {
+                directory: sibling.to_string_lossy().into_owned(),
+                branch: "ausente".into(),
+                sha: None,
+                create_branch: true,
+            },
+        )
+        .expect("alta");
+        fs::remove_dir_all(&sibling).expect("rm");
+        let listed = list_worktrees(path).expect("lista");
+        let gone = listed
+            .iter()
+            .find(|copy| copy.branch.as_deref() == Some("ausente"))
+            .expect("ausente");
+        assert!(gone.missing);
+        assert!(gone.situation.contains("folder is gone"));
+        let blocked = delete_branch(path, "ausente").expect_err("sigue ocupada");
+        assert!(blocked.to_string().contains("missing copy"));
+        prune_worktrees(path).expect("podar");
+        delete_branch(path, "ausente").expect("libre");
+        assert!(
+            list_worktrees(path)
+                .expect("después")
+                .iter()
+                .all(|copy| copy.branch.as_deref() != Some("ausente"))
+        );
+    }
+
+    #[test]
+    fn locked_worktree_stays_until_unlock_and_locked_missing_survives_prune() {
+        let scratch = scratch_dir();
+        let repo_dir = init_repo(&scratch);
+        let path = repo_dir.to_str().unwrap();
+        let sibling = scratch.0.join("repo-candado");
+        add_worktree(
+            path,
+            &AddWorktreeRequest {
+                directory: sibling.to_string_lossy().into_owned(),
+                branch: "candado".into(),
+                sha: None,
+                create_branch: true,
+            },
+        )
+        .expect("alta");
+        let repo = GitRepository::open(&repo_dir).expect("abrir");
+        let names = repo.worktrees().expect("nombres");
+        let name = names.iter().flatten().next().expect("nombre");
+        let worktree = repo.find_worktree(name).expect("worktree");
+        worktree.lock(Some("agente")).expect("lock");
+
+        let listed = list_worktrees(path).expect("lista");
+        let locked = listed
+            .iter()
+            .find(|copy| copy.branch.as_deref() == Some("candado"))
+            .expect("candado");
+        assert!(locked.locked);
+        assert_eq!(locked.lock_reason.as_deref(), Some("agente"));
+        assert!(locked.situation.contains("Locked: agente"));
+        let refused = remove_worktree(path, &locked.path, true).expect_err("bloqueada");
+        assert!(refused.to_string().contains("Unlock it"));
+
+        fs::remove_dir_all(&sibling).expect("rm");
+        prune_worktrees(path).expect("podar no toca el candado");
+        let still = list_worktrees(path).expect("sigue");
+        let stuck = still
+            .iter()
+            .find(|copy| copy.branch.as_deref() == Some("candado"))
+            .expect("sigue la fila");
+        assert!(stuck.locked && stuck.missing);
+        assert!(stuck.situation.contains("unlock, then prune"));
+        let occupied = delete_branch(path, "candado").expect_err("ocupada");
+        assert!(occupied.to_string().contains("locked copy"));
+        unlock_worktree(path, &stuck.path).expect("unlock");
+        prune_worktrees(path).expect("podar");
+        delete_branch(path, "candado").expect("libre");
+    }
+
+    #[test]
+    fn worktree_destination_inside_the_tree_needs_an_ignore_rule() {
+        let scratch = scratch_dir();
+        let repo_dir = init_repo(&scratch);
+        let path = repo_dir.to_str().unwrap();
+        let visible = repo_dir.join("visible").join("copy");
+        let rejected = add_worktree(
+            path,
+            &AddWorktreeRequest {
+                directory: visible.to_string_lossy().into_owned(),
+                branch: "visible".into(),
+                sha: None,
+                create_branch: true,
+            },
+        )
+        .expect_err("dentro");
+        assert!(rejected.to_string().contains("inside the working tree"));
+        assert!(
+            GitRepository::open(&repo_dir)
+                .unwrap()
+                .find_branch("visible", git2::BranchType::Local)
+                .is_err()
+        );
+
+        fs::write(repo_dir.join(".gitignore"), "nested/\n").expect("ignore");
+        let nested = repo_dir.join("nested").join("copy");
+        let created = add_worktree(
+            path,
+            &AddWorktreeRequest {
+                directory: nested.to_string_lossy().into_owned(),
+                branch: "nested".into(),
+                sha: None,
+                create_branch: true,
+            },
+        )
+        .expect("ignorada");
+        assert_eq!(created.current_branch.as_deref(), Some("nested"));
+        remove_worktree(path, &created.path, false).expect("quitar");
+    }
+
+    #[test]
+    fn matching_folder_names_are_disambiguated() {
+        let scratch = scratch_dir();
+        let repo_dir = init_repo(&scratch);
+        let path = repo_dir.to_str().unwrap();
+        let other = scratch.0.join("otra").join("repo");
+        add_worktree(
+            path,
+            &AddWorktreeRequest {
+                directory: other.to_string_lossy().into_owned(),
+                branch: "lado".into(),
+                sha: None,
+                create_branch: true,
+            },
+        )
+        .expect("alta");
+        let main = open_repository(path).expect("main");
+        let copy = open_repository(other.to_str().unwrap()).expect("copia");
+        assert!(main.name.contains(" · "));
+        assert!(copy.name.contains(" · "));
+        assert_ne!(main.name, copy.name);
+        assert!(copy.name.contains("lado"));
+    }
+
+    #[test]
+    fn two_worktrees_of_one_repo_share_the_lock() {
+        let scratch = scratch_dir();
+        let repo_dir = init_repo(&scratch);
+        let path = repo_dir.to_str().unwrap().to_string();
+        let sibling = scratch.0.join("repo-lock");
+        let created = add_worktree(
+            &path,
+            &AddWorktreeRequest {
+                directory: sibling.to_string_lossy().into_owned(),
+                branch: "lock".into(),
+                sha: None,
+                create_branch: true,
+            },
+        )
+        .expect("alta");
+        let linked = created.path.clone();
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let entered = gate.clone();
+        let main_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            with_repo(&main_path, || {
+                entered.wait();
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            });
+        });
+        gate.wait();
+        let started = std::time::Instant::now();
+        with_repo(&linked, || {
+            create_branch(&linked, "desde-copia").expect("rama");
+        });
+        assert!(started.elapsed() >= std::time::Duration::from_millis(180));
+        worker.join().expect("hilo");
+        assert!(
+            list_branches(&path)
+                .expect("ramas")
+                .iter()
+                .any(|branch| branch.name == "desde-copia")
+        );
     }
 }

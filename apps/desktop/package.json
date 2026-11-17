@@ -1,7 +1,7 @@
 {
   "name": "@githydra/desktop",
   "private": true,
-  "version": "0.13.0",
+  "version": "0.15.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -21,6 +21,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "lucide-react": "^0.553.0",
+    "mermaid": "^12.3.0",
     "monaco-editor": "^0.55.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

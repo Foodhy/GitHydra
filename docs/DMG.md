@@ -37,7 +37,7 @@ Sin `CARGO_TARGET_DIR`:
 
 Con `CARGO_TARGET_DIR` definido, el mismo árbol cuelga de ese directorio (`$CARGO_TARGET_DIR/release/bundle/...`). `scripts/install-macos.sh` ya mira las dos rutas.
 
-El nombre del disco lo arma Tauri con el producto, la versión de `tauri.conf.json` y la arquitectura de esta Mac. En Apple Silicon, con la versión actual, es `GitHydra_0.13.0_aarch64.dmg`.
+El nombre del disco lo arma Tauri con el producto, la versión de `tauri.conf.json` y la arquitectura de esta Mac. En Apple Silicon, con la versión actual, es `GitHydra_0.15.0_aarch64.dmg`.
 
 ## Comprobar
 

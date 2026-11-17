@@ -4,7 +4,13 @@ import type {
   StashEntry,
   WorkingTreeEntry,
 } from "@githydra/contracts";
-import { type MouseEvent, useEffect, useState } from "react";
+import {
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useWorkingTree } from "../../hooks/useWorkingTree";
 import {
@@ -16,9 +22,20 @@ import { discardPrompt } from "../../lib/discard-prompt";
 import { formatWhen } from "../../lib/format";
 import { toGitClientError } from "../../lib/git/errors";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { t, useT } from "../../lib/i18n";
 import { runOperation } from "../../lib/run-operation";
 import { useOperation } from "../../stores/operation";
 import type { WorkFile } from "../diff/WorkDiffPanel";
+
+const COMMIT_HEIGHT_KEY = "githydra.stageCommitHeight";
+
+function readCommitHeight(): number {
+  const saved = Number(localStorage.getItem(COMMIT_HEIGHT_KEY));
+  if (!Number.isFinite(saved)) {
+    return 240;
+  }
+  return Math.min(560, Math.max(120, saved));
+}
 
 export function StagingPanel({
   path,
@@ -46,6 +63,9 @@ export function StagingPanel({
   const running = useOperation((state) => state.running);
   const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
+  const [proposed, setProposed] = useState(false);
+  const touched = useRef(false);
+  const tr = useT();
   const [drafting, setDrafting] = useState(false);
   const [candidates, setCandidates] = useState<CommitMessageCandidate[]>([]);
   const [ai, setAi] = useState<CommitAi>({
@@ -83,6 +103,25 @@ export function StagingPanel({
       alive = false;
     };
   }, [path]);
+  useEffect(() => {
+    let alive = true;
+    void tauriGit
+      .readCommitProposal(path)
+      .then((proposal) => {
+        if (!alive || revision < 0 || !proposal || touched.current) {
+          return;
+        }
+        setSummary((current) => (current.trim() ? current : proposal.summary));
+        setDescription((current) =>
+          current.trim() ? current : proposal.description,
+        );
+        setProposed(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [path, revision]);
   useEffect(() => {
     let alive = true;
     readCommitAi()
@@ -165,7 +204,7 @@ export function StagingPanel({
     return [
       {
         id: "stage",
-        label: entry.staged ? "Quitar del stage" : "Stage",
+        label: entry.staged ? tr("stage.unstage") : tr("stage.stage"),
         disabled: busy,
         onSelect: () => {
           void move([entry.path], entry.staged);
@@ -173,7 +212,7 @@ export function StagingPanel({
       },
       {
         id: "discard",
-        label: "Descartar cambios",
+        label: tr("stage.discard"),
         danger: true,
         disabled: busy,
         onSelect: () => {
@@ -188,11 +227,11 @@ export function StagingPanel({
       return;
     }
     if (!entries.some((entry) => entry.staged)) {
-      setActionError("Pasa archivos a stage antes de generar el mensaje.");
+      setActionError(tr("stage.needStage"));
       return;
     }
     if (!ai.enabled || ai.providers.length === 0) {
-      setActionError("Elige un proveedor en Preferencias.");
+      setActionError(tr("stage.needProvider"));
       return;
     }
     setDrafting(true);
@@ -226,7 +265,7 @@ export function StagingPanel({
     }
     void runOperation(
       "other",
-      "Confirmando",
+      tr("stage.confirming"),
       async () => {
         const author = authors.find((item) => item.email === authorEmail);
         await tauriGit.createCommit(
@@ -238,24 +277,67 @@ export function StagingPanel({
         );
         setSummary("");
         setDescription("");
+        setProposed(false);
+        touched.current = false;
       },
       onRepositoryChanged,
     );
   }
 
+  const asideRef = useRef<HTMLElement>(null);
+  const [commitHeight, setCommitHeight] = useState(readCommitHeight);
+
+  function resizeCommit(event: ReactPointerEvent<HTMLHRElement>) {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startY = event.clientY;
+    const start = commitHeight;
+    const parent = asideRef.current?.getBoundingClientRect().height ?? 640;
+    const ceiling = Math.max(160, parent - 96);
+    const move = (next: PointerEvent) => {
+      const height = start - (next.clientY - startY);
+      setCommitHeight(Math.min(ceiling, Math.max(120, height)));
+    };
+    const stop = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
+      setCommitHeight((current) => {
+        localStorage.setItem(COMMIT_HEIGHT_KEY, String(current));
+        return current;
+      });
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", stop);
+    handle.addEventListener("pointercancel", stop);
+  }
+
+  function nudgeCommit(delta: number) {
+    const parent = asideRef.current?.getBoundingClientRect().height ?? 640;
+    const ceiling = Math.max(160, parent - 96);
+    setCommitHeight((current) => {
+      const next = Math.min(ceiling, Math.max(120, current + delta));
+      localStorage.setItem(COMMIT_HEIGHT_KEY, String(next));
+      return next;
+    });
+  }
+
   return (
-    <aside className="flex h-full flex-col bg-surface-raised">
+    <aside ref={asideRef} className="flex h-full flex-col bg-surface-raised">
       <header className="border-b border-line px-3 py-2">
         <p className="text-xs text-muted">
           {loading && entries.length === 0
-            ? "Leyendo cambios…"
+            ? tr("stage.reading")
             : refreshing
-              ? "Actualizando cambios…"
-              : `${entries.length} cambio${entries.length === 1 ? "" : "s"} en el árbol`}
+              ? tr("stage.updating")
+              : tr(entries.length === 1 ? "stage.count" : "stage.countPlural", {
+                  count: entries.length,
+                })}
         </p>
         <input
           value={query}
-          placeholder="Filtrar archivos"
+          placeholder={tr("stage.filter")}
           onChange={(event) => setQuery(event.target.value)}
           className="mt-1 w-full bg-transparent text-xs outline-none placeholder:text-muted"
         />
@@ -266,7 +348,7 @@ export function StagingPanel({
           <p className="px-3 py-2 text-xs text-warn">{actionError}</p>
         ) : null}
         <FileGroup
-          title="Sin stage"
+          title={tr("stage.unstaged")}
           entries={unstaged}
           busy={busy}
           filtering={needle.length > 0}
@@ -286,7 +368,7 @@ export function StagingPanel({
           }}
         />
         <FileGroup
-          title="En stage"
+          title={tr("stage.staged")}
           entries={staged}
           busy={busy}
           filtering={needle.length > 0}
@@ -314,109 +396,147 @@ export function StagingPanel({
           onClose={() => setMenu(null)}
         />
       ) : null}
-      <form
-        className="border-t border-line p-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void confirmCommit();
+      <hr
+        aria-orientation="horizontal"
+        aria-label={tr("stage.resize")}
+        aria-valuenow={commitHeight}
+        aria-valuemin={120}
+        aria-valuemax={560}
+        tabIndex={0}
+        onPointerDown={resizeCommit}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            nudgeCommit(24);
+          }
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            nudgeCommit(-24);
+          }
         }}
-      >
-        {candidates.length > 0 ? (
-          <div className="mb-2 grid gap-1">
-            {candidates.map((candidate) =>
-              candidate.error ? (
-                <p key={candidate.provider} className="text-xs text-warn">
-                  {commitAgentLabel(candidate.provider)}: {candidate.error}
-                </p>
-              ) : (
-                <button
-                  key={candidate.provider}
-                  type="button"
-                  onClick={() => {
-                    setSummary(candidate.summary);
-                    setDescription(candidate.description);
-                  }}
-                  className="rounded border border-line px-2 py-1 text-left hover:bg-surface"
-                >
-                  <span className="block text-[11px] text-muted">
-                    {commitAgentLabel(candidate.provider)}
-                  </span>
-                  <span className="block truncate text-xs">
-                    {candidate.summary}
-                  </span>
-                </button>
-              ),
-            )}
-          </div>
-        ) : null}
-        <div className="relative mb-2">
-          <input
-            value={summary}
-            disabled={busy || running || drafting}
-            placeholder="Resumen del commit"
-            onChange={(event) => setSummary(event.target.value)}
-            className={`w-full rounded border border-line bg-surface py-1.5 pl-2 text-sm disabled:text-muted ${ai.enabled ? "pr-9" : "pr-2"}`}
-          />
-          {ai.enabled ? (
-            <button
-              type="button"
-              title={drafting ? "Generando el mensaje…" : "Generar mensaje"}
-              aria-label="Generar mensaje"
-              aria-busy={drafting}
-              disabled={busy || running || drafting}
-              onClick={() => {
-                void draftMessage();
-              }}
-              className="absolute top-1/2 right-1 grid h-7 w-7 -translate-y-1/2 place-items-center rounded text-accent hover:bg-accent/10 disabled:text-muted"
-            >
-              <SparkleIcon className={drafting ? "animate-pulse" : ""} />
-            </button>
-          ) : null}
-        </div>
-        <textarea
-          value={description}
-          disabled={busy || running || drafting}
-          rows={3}
-          placeholder="Descripción"
-          onChange={(event) => setDescription(event.target.value)}
-          className="mb-2 w-full resize-none rounded border border-line bg-surface px-2 py-1.5 text-sm disabled:text-muted"
-        />
-        {authors.length > 0 ? (
-          <label className="mb-2 block text-xs text-muted">
-            Autor
-            <select
-              value={authorEmail}
-              disabled={busy || running || drafting}
-              aria-label="Autor del commit"
-              onChange={(event) => setAuthorEmail(event.target.value)}
-              className="mt-1 w-full rounded border border-line bg-surface px-2 py-1.5 text-sm text-text disabled:text-muted"
-            >
-              {authors.map((author) => (
-                <option key={author.email} value={author.email}>
-                  {`${author.name} <${author.email}>${author.current ? " · actual" : ""}`}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <label className="mb-2 flex items-center gap-2 text-xs text-muted">
-          <input type="checkbox" disabled />
-          Enmendar el commit anterior
-        </label>
-        <button
-          type="submit"
-          disabled={busy || running || drafting || summary.trim().length === 0}
-          className="w-full rounded bg-accent px-3 py-2 text-sm font-medium text-surface disabled:bg-accent/40"
-        >
-          Confirmar
-        </button>
-      </form>
-      <StashSection
-        path={path}
-        revision={revision}
-        disabled={busy || running}
-        onRepositoryChanged={onRepositoryChanged}
+        className="h-1.5 shrink-0 cursor-row-resize border-y border-line bg-surface hover:bg-accent/40"
       />
+      <div
+        className="flex min-h-0 shrink-0 flex-col overflow-auto"
+        style={{ height: commitHeight, maxHeight: "70%" }}
+      >
+        <form
+          className="border-t border-line p-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void confirmCommit();
+          }}
+        >
+          {candidates.length > 0 ? (
+            <div className="mb-2 grid gap-1">
+              {candidates.map((candidate) =>
+                candidate.error ? (
+                  <p key={candidate.provider} className="text-xs text-warn">
+                    {commitAgentLabel(candidate.provider)}: {candidate.error}
+                  </p>
+                ) : (
+                  <button
+                    key={candidate.provider}
+                    type="button"
+                    onClick={() => {
+                      setSummary(candidate.summary);
+                      setDescription(candidate.description);
+                    }}
+                    className="rounded border border-line px-2 py-1 text-left hover:bg-surface"
+                  >
+                    <span className="block text-[11px] text-muted">
+                      {commitAgentLabel(candidate.provider)}
+                    </span>
+                    <span className="block truncate text-xs">
+                      {candidate.summary}
+                    </span>
+                  </button>
+                ),
+              )}
+            </div>
+          ) : null}
+          {proposed ? (
+            <p className="mb-2 text-xs text-muted">{tr("stage.proposed")}</p>
+          ) : null}
+          <div className="relative mb-2">
+            <input
+              value={summary}
+              disabled={busy || running || drafting}
+              placeholder={tr("stage.summary")}
+              onChange={(event) => {
+                touched.current = true;
+                setProposed(false);
+                setSummary(event.target.value);
+              }}
+              className={`w-full rounded border border-line bg-surface py-1.5 pl-2 text-sm disabled:text-muted ${ai.enabled ? "pr-9" : "pr-2"}`}
+            />
+            {ai.enabled ? (
+              <button
+                type="button"
+                title={drafting ? tr("stage.generating") : tr("stage.generate")}
+                aria-label={tr("stage.generate")}
+                aria-busy={drafting}
+                disabled={busy || running || drafting}
+                onClick={() => {
+                  void draftMessage();
+                }}
+                className="absolute top-1/2 right-1 grid h-7 w-7 -translate-y-1/2 place-items-center rounded text-accent hover:bg-accent/10 disabled:text-muted"
+              >
+                <SparkleIcon className={drafting ? "animate-pulse" : ""} />
+              </button>
+            ) : null}
+          </div>
+          <textarea
+            value={description}
+            disabled={busy || running || drafting}
+            rows={3}
+            placeholder={tr("stage.description")}
+            onChange={(event) => {
+              touched.current = true;
+              setProposed(false);
+              setDescription(event.target.value);
+            }}
+            className="mb-2 w-full resize-none rounded border border-line bg-surface px-2 py-1.5 text-sm disabled:text-muted"
+          />
+          {authors.length > 0 ? (
+            <label className="mb-2 block text-xs text-muted">
+              {tr("stage.author")}
+              <select
+                value={authorEmail}
+                disabled={busy || running || drafting}
+                aria-label={tr("stage.authorLabel")}
+                onChange={(event) => setAuthorEmail(event.target.value)}
+                className="mt-1 w-full rounded border border-line bg-surface px-2 py-1.5 text-sm text-text disabled:text-muted"
+              >
+                {authors.map((author) => (
+                  <option key={author.email} value={author.email}>
+                    {`${author.name} <${author.email}>${author.current ? ` · ${tr("stage.currentAuthor")}` : ""}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <label className="mb-2 flex items-center gap-2 text-xs text-muted">
+            <input type="checkbox" disabled />
+            {tr("stage.amend")}
+          </label>
+          <button
+            type="submit"
+            disabled={
+              busy || running || drafting || summary.trim().length === 0
+            }
+            className="w-full rounded bg-accent px-3 py-2 text-sm font-medium text-surface disabled:bg-accent/40"
+          >
+            {tr("stage.confirm")}
+          </button>
+        </form>
+        <StashSection
+          path={path}
+          revision={revision}
+          disabled={busy || running}
+          onRepositoryChanged={onRepositoryChanged}
+        />
+      </div>
     </aside>
   );
 }
@@ -474,6 +594,7 @@ function StashSection({
   }
 
   const locked = working || disabled;
+  const tr = useT();
 
   return (
     <section className="border-t border-line p-3">
@@ -487,7 +608,7 @@ function StashSection({
           }}
           className="rounded border border-line px-2 py-1 text-[11px] hover:bg-surface-overlay disabled:opacity-40"
         >
-          Guardar cambios
+          {tr("stash.save")}
         </button>
         <button
           type="button"
@@ -497,12 +618,12 @@ function StashSection({
           }}
           className="rounded border border-line px-2 py-1 text-[11px] hover:bg-surface-overlay disabled:opacity-40"
         >
-          Incluir archivos nuevos
+          {tr("stash.saveUntracked")}
         </button>
       </div>
       {error ? <p className="mb-2 text-[11px] text-warn">{error}</p> : null}
       {entries.length === 0 ? (
-        <p className="text-[11px] text-muted">No hay reservas.</p>
+        <p className="text-[11px] text-muted">{tr("stash.empty")}</p>
       ) : (
         <ul className="m-0 list-none p-0">
           {entries.map((entry) => (
@@ -511,7 +632,8 @@ function StashSection({
                 {entry.message}
               </p>
               <p className="truncate text-[11px] text-muted">
-                {entry.branch ?? "sin rama"} · {formatWhen(entry.stashedAt)}
+                {entry.branch ?? tr("stash.noBranch")} ·{" "}
+                {formatWhen(entry.stashedAt)}
               </p>
               <div className="mt-1 flex gap-2 text-[11px]">
                 <button
@@ -522,7 +644,7 @@ function StashSection({
                   }}
                   className="text-accent disabled:opacity-40"
                 >
-                  Aplicar
+                  {tr("stash.apply")}
                 </button>
                 <button
                   type="button"
@@ -532,7 +654,7 @@ function StashSection({
                   }}
                   className="text-accent disabled:opacity-40"
                 >
-                  Traer
+                  {tr("stash.pop")}
                 </button>
                 <button
                   type="button"
@@ -542,7 +664,7 @@ function StashSection({
                   }}
                   className="text-warn disabled:opacity-40"
                 >
-                  Eliminar
+                  {tr("stash.drop")}
                 </button>
               </div>
             </li>
@@ -593,6 +715,7 @@ function FileGroup({
   onOpenMenu: (entry: WorkingTreeEntry, event: MouseEvent) => void;
   onMove: (paths: string[]) => void;
 }) {
+  useT();
   const tree = groupFiles(entries);
   return (
     <section className="border-b border-line">
@@ -613,7 +736,7 @@ function FileGroup({
         ) : null}
       </div>
       {entries.length === 0 ? (
-        <p className="px-3 pb-2 text-xs text-muted">Vacío</p>
+        <p className="px-3 pb-2 text-xs text-muted">{t("empty.group")}</p>
       ) : (
         <ul className="pb-2">
           {tree.loose.map((entry) => (
@@ -689,6 +812,7 @@ function FileRow({
   onOpenMenu: (entry: WorkingTreeEntry, event: MouseEvent) => void;
   onMove: (paths: string[]) => void;
 }) {
+  const tr = useT();
   const active =
     selected?.path === entry.path && selected.staged === entry.staged;
   const slash = label.lastIndexOf("/");
@@ -722,7 +846,7 @@ function FileRow({
         onClick={() => onMove([entry.path])}
         className="px-2 text-[11px] text-accent disabled:text-muted"
       >
-        {entry.staged ? "Quitar" : "Stage"}
+        {entry.staged ? tr("stage.unstage") : tr("stage.stage")}
       </button>
     </li>
   );

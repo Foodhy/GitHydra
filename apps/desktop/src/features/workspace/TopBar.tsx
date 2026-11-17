@@ -12,6 +12,7 @@ import {
 import { ToolButton } from "../../components/ToolButton";
 import { useAppVersion } from "../../hooks/useAppVersion";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { useT } from "../../lib/i18n";
 import { showRepoManagement } from "../../lib/repo-actions";
 import {
   canCancel,
@@ -41,6 +42,7 @@ export function TopBar({
   onRepositoryChanged: () => Promise<void>;
 }) {
   const info = useRepoSession((state) => state.info);
+  const tr = useT();
   const version = useAppVersion();
   const operation = useOperation();
   const branch = info?.isDetached
@@ -63,7 +65,7 @@ export function TopBar({
         to="/"
         onClick={() => showRepoManagement()}
         className="rounded p-1 text-accent"
-        title="Repos"
+        title={tr("top.repos")}
       >
         <FolderGit2 size={18} />
       </Link>
@@ -101,7 +103,7 @@ export function TopBar({
           busy={operation.running && operation.kind === "fetch"}
           disabled={operation.running && operation.kind !== "fetch"}
           onClick={() => {
-            run("fetch", "Fetch", () => tauriGit.fetch(path));
+            run("fetch", tr("top.fetch"), () => tauriGit.fetch(path));
           }}
         >
           <CloudDownload size={16} />
@@ -111,7 +113,7 @@ export function TopBar({
           busy={operation.running && operation.kind === "pull"}
           disabled={operation.running && operation.kind !== "pull"}
           onClick={() => {
-            run("pull", "Pull", () => tauriGit.pull(path));
+            run("pull", tr("top.pull"), () => tauriGit.pull(path));
           }}
         >
           <ArrowDownToLine size={16} />
@@ -121,7 +123,7 @@ export function TopBar({
           busy={operation.running && operation.kind === "push"}
           disabled={operation.running && operation.kind !== "push"}
           onClick={() => {
-            run("push", "Push", () => tauriGit.push(path));
+            run("push", tr("top.push"), () => tauriGit.push(path));
           }}
         >
           <ArrowUpFromLine size={16} />
@@ -146,10 +148,10 @@ export function TopBar({
       <Link
         to="/settings"
         className="rounded-md p-1.5 text-muted hover:bg-surface-overlay hover:text-text"
-        title="Preferencias"
+        title={tr("top.settings")}
       >
         <Settings size={16} />
-        <span className="sr-only">Preferencias</span>
+        <span className="sr-only">{tr("top.settings")}</span>
       </Link>
       <span className="font-mono text-[11px] text-muted">v{version}</span>
     </header>

@@ -4,8 +4,10 @@ import {
   initialTabs,
   newTab,
   openPath,
+  renamePath,
   reopenClosed,
   showManagement,
+  worktreeTabName,
 } from "./repo-tabs.ts";
 
 const start = initialTabs();
@@ -73,3 +75,26 @@ assert.equal(last.tabs.length, 1);
 assert.equal(last.tabs[0]?.id, "fresh");
 assert.equal(last.tabs[0]?.path, null);
 assert.deepEqual(last.closed, ["/x"]);
+
+const copies = [
+  { path: "/code/app", branch: "main", isDetached: false },
+  { path: "/tmp/otra/app", branch: "lado", isDetached: false },
+];
+assert.equal(worktreeTabName(copies[0], copies), "app · main");
+assert.equal(worktreeTabName(copies[1], copies), "app · lado");
+assert.equal(
+  worktreeTabName({ path: "/tmp/suelto/app", branch: null, isDetached: true }, [
+    { path: "/code/app" },
+    { path: "/tmp/suelto/app" },
+  ]),
+  "suelto/app",
+);
+assert.equal(
+  worktreeTabName({ path: "/code/unica", branch: "main", isDetached: false }, [
+    { path: "/code/unica" },
+  ]),
+  "unica",
+);
+const renamed = renamePath(fromHome, "/repo/three", "three · main");
+assert.equal(renamed.tabs[0]?.name, "three · main");
+assert.equal(renamePath(renamed, "/repo/three", "three · main"), renamed);

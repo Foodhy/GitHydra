@@ -53,3 +53,19 @@ assert.equal("error" in two, true);
 const shown = visiblePins(ready);
 assert.deepEqual(shown, ["boot", "test"]);
 assert.equal(serializeScripts(ready).includes('"scripts"'), true);
+
+const withIcon = putScript(ready, "test", "swift test", "eraser");
+assert.equal("book" in withIcon && withIcon.book.icons.test, "eraser");
+const cleared = putScript(
+  "book" in withIcon ? withIcon.book : ready,
+  "test",
+  "swift test",
+  null,
+);
+assert.equal("book" in cleared && cleared.book.icons.test, undefined);
+const kept = parseScripts(
+  '{"pinned":[],"scripts":{"status":"git status"},"icons":{"status":"eraser"}}',
+);
+assert.equal("book" in kept && kept.book.icons.status, "eraser");
+const legacy = parseScripts('{"pinned":[],"scripts":{"status":"git status"}}');
+assert.equal("book" in legacy && Object.keys(legacy.book.icons).length, 0);

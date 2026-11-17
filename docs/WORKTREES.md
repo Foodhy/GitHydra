@@ -1,20 +1,59 @@
 # Worktrees
 
-Idea para una iteración futura. No hay comandos, contratos ni UI. En el roadmap sigue siendo el ítem pendiente «Worktree».
+Desde 0.14.0 una copia es otra carpeta del mismo repositorio. Comparte commits, ramas, tags, remotos, config y hooks. Tiene sus propios archivos, su stage y su `HEAD`. La carpeta que ya tenías abierta no cambia de rama.
 
-La acción que esa iteración tiene que ofrecer: abrir una rama en otra carpeta y dejar el checkout actual donde está. Las dos carpetas comparten commits, ramas y remotos. Cada una tiene sus archivos, su stage y su `HEAD`.
+Una rama local solo puede estar checked out en una copia. Los archivos sin seguimiento se quedan donde estaban: `.env`, `node_modules` y builds no viajan. La copia nueva sale en el commit de la rama.
 
-## Qué hay hoy
+## Abrir una copia
 
-Abrir la carpeta de un worktree ya funciona por accidente. `Repository::discover` sigue el archivo `.git` de la copia y `open_repository` devuelve el `workdir`. Una pestaña por ruta basta para tener las dos abiertas. Se ven como dos repositorios distintos, con el mismo nombre de carpeta, sin decir que comparten historia.
+Clic derecho en una rama local, o en un commit del historial, y **Abrir en otra carpeta**.
 
-`watch_roots` ya separa el gitdir privado del `commondir` cuando no son la misma ruta, así que los refs compartidos se observan.
+El diálogo trae:
 
-El candado de `with_repo` usa la ruta de la carpeta. Dos pestañas de dos worktrees del mismo repo no comparten candado y pueden escribir ramas y objetos a la vez. El candado de esta iteración es el directorio común, canónico.
+- la rama, ya rellenada si vienes de una rama;
+- **Crear rama nueva en este punto**, marcado al venir de un commit y desmarcado al venir de una rama local que ya existe;
+- la carpeta hermana `{nombre-del-repo}-{rama}`. Una barra en el nombre de la rama pasa a guion en la carpeta (`feature/login` → `GitHydra-feature-login`).
 
-`worktree_kind` en `apps/desktop/src-tauri/src/git/mod.rs` no es este concepto. Clasifica cambios sin stage (`WT_MODIFIED`, `WT_NEW`). El nombre nuevo en contratos tiene que ser otro, por ejemplo `LinkedWorktree`, para no mezclarlos.
+Al confirmar, GitHydra crea la copia y la abre en una pestaña nueva. La terminal de esa pestaña arranca en la carpeta nueva. El aviso del diálogo es literal: `.env` y las dependencias no se copian, y el servidor de desarrollo de esa carpeta necesita otro puerto. GitHydra no elige el puerto ni copia esos archivos.
 
-Checkout y borrado de rama solo miran el `HEAD` de la carpeta abierta. Si la rama está ocupada en otra copia, el fallo llega como texto crudo de git.
+Una ruta dentro del árbol de trabajo se rechaza, porque `git status` la vería como archivos nuevos. Solo pasa si esa ruta está ignorada (por ejemplo `.claude/worktrees/…` cuando `.claude/` está en `.gitignore`).
+
+## La lista Copias
+
+Está al final del panel de ramas. Sale igual desde la carpeta principal y desde cualquier copia, porque lee el `commondir`.
+
+Cada fila muestra la rama, o `HEAD` y siete caracteres del sha si está suelto, la ruta en corto y una frase. Un clic en la fila abre las acciones: **Abrir**, **Revelar**, **Desbloquear**, **Quitar**, y **Desbloquear y podar** cuando toca. **Abrir** deja la pestaña actual en su rama y abre la otra carpeta. **Revelar** la muestra en el Finder.
+
+Arriba de la lista, **Podar ausentes** recorre las entradas cuya carpeta ya no existe y las suelta. No borra commits ni toca una carpeta que sigue en disco. Una entrada bloqueada no entra en esa poda.
+
+Si dos carpetas terminan con el mismo nombre, la pestaña muestra `carpeta · rama`. Con `HEAD` suelto muestra la carpeta padre: `padre/carpeta`.
+
+La rama local que está en otra copia lleva esa ruta en su propia fila. Checkout y borrar siguen ejecutándose y enseñan la frase, para ver el fallo y no solo la ruta.
+
+## Qué hacer con cada frase
+
+La ventana muestra la frase en el idioma elegido. El texto de origen, en inglés, es este:
+
+| Frase                                                                                                            | Qué pasa                                                                        | Qué hacer                                                                         |
+| ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| This is the open folder.                                                                                         | Es la pestaña actual.                                                           | Nada. Sigue aquí.                                                                 |
+| Main folder. It cannot be removed.                                                                               | Es el checkout original.                                                        | No tiene Quitar.                                                                  |
+| Another folder of the same history.                                                                              | Copia sana, en su rama.                                                         | Abrir, revelar o quitar.                                                          |
+| Detached HEAD at `abcdef1`.                                                                                      | No hay rama; a menudo la dejó un agente.                                        | Abrir para mirar. Al quitar, no hay rama que borrar.                              |
+| `topic` is checked out at `/ruta/GitHydra-topic`                                                                 | Checkout o borrar de esa rama. Borrar con `-D` tampoco la suelta.               | Quitar la copia, o abrirla y cambiarla de rama. Después se puede borrar la rama.  |
+| The folder is gone. The branch is still checked out. Prune frees it.                                             | Alguien hizo `rm -rf`. El registro sigue en `.git/worktrees`.                   | **Podar ausentes**. Luego la rama se puede borrar.                                |
+| Locked: `agente`. Remove fails until you unlock.                                                                 | `git worktree lock` o un agente en marcha.                                      | Confirma que el agente terminó. **Desbloquear**, luego **Quitar**.                |
+| Locked and the folder is gone. Prune skips it: unlock, then prune. If the disk is just unmounted, do not unlock. | El candado sobrevive a la carpeta borrada. También protege un disco desmontado. | Si el disco solo está fuera, déjala. Si el agente murió, **Desbloquear y podar**. |
+
+Al quitar, la confirmación dice que la rama se queda. Si hay cambios sin commit, la segunda pregunta es «There are uncommitted changes in `/ruta`. Confirm again to remove it.» En español: «Hay cambios sin commit en `/ruta`. Confirma otra vez para quitarla.» Aceptarla borra esos cambios con la carpeta. La rama, si la había, sigue existiendo.
+
+Checkout o borrado de una rama cuya copia está ausente dice: «`topic` is still checked out by a missing copy at `/ruta`. Prune it to free the branch.» Si además está bloqueada: «`topic` is still checked out by a locked copy whose folder is gone (`/ruta`). Unlock it, then prune.»
+
+## Copias que deja un agente
+
+Cursor y Claude crean copias para no pisar el checkout abierto. GitHydra no las crea por ellos y no las esconde. Si comparten el `commondir`, salen en la lista aunque la ruta sea `~/.cursor/worktrees/…` o `.claude/worktrees/…`, con nombre hash, `HEAD` suelto o una rama sintética, y a menudo `locked` mientras el agente corre.
+
+Para entrar: **Abrir**. La copia no trae `.env` ni `node_modules`. Para cerrarla cuando el agente terminó: **Desbloquear** si la frase lo pide, **Quitar**, y borrar la rama si ya no la quieres. Si boraste la carpeta a mano, la fila queda ausente y **Podar ausentes** libera la rama. Si sigue bloqueada, la poda no hace nada: usa **Desbloquear y podar**.
 
 ## En disco
 
@@ -33,133 +72,19 @@ GitHydra/                         checkout principal, rama main
   .git                            un archivo: gitdir: …/GitHydra/.git/worktrees/GitHydra-prueba
 ```
 
-Cada copia guarda sus archivos, su index, su `HEAD` y un merge a medias. Comparten objetos, ramas, tags, remotos, config y hooks.
+El `.git` de la copia guarda una ruta absoluta. Mover o renombrar el repo principal deja las copias colgando. GitHydra no reescribe esas rutas.
 
-Una rama local solo puede estar checked out en una copia. Los archivos sin seguimiento se quedan en la carpeta de origen: `.env`, `node_modules` y builds no viajan. La copia nueva sale en el commit de la rama.
+Dos pestañas del mismo repositorio comparten un candado: el `commondir` canónico. Un commit en una y un alta de rama en la otra esperan el mismo turno. El watch de refs ya mira ese directorio común.
 
-El archivo `.git` de la copia guarda una ruta absoluta. Mover el repo principal deja las copias colgando. Reparar eso queda fuera de esta iteración.
+## MCP
 
-Crear la copia dentro del propio árbol de trabajo hace que `git status` la vea como archivos nuevos. El destino por defecto es una carpeta hermana, `{nombre-del-repo}-{rama}`.
+`githydra_list_worktrees` devuelve la misma lista, con la misma frase en `situation`. No crea ni borra carpetas: un cliente externo que cree copias al lado del repo es justo el caso que la lista tiene que mostrar.
 
-## Qué se vería
-
-En el menú de una rama o de un commit, junto a checkout y «crear rama»: **Abrir en otra carpeta**.
-
-El diálogo pide:
-
-- rama existente, o nombre de una rama nueva en ese commit;
-- carpeta destino, con la hermana ya rellenada.
-
-Al confirmar, GitHydra crea el worktree y abre esa ruta en una pestaña nueva. La pestaña actual no cambia de rama. La terminal de la pestaña nueva arranca en la carpeta nueva. El servidor de la app, si se lanza ahí, usa otro puerto: esta iteración no elige el puerto ni copia `.env`.
-
-Una lista, en el mismo sitio que las ramas, muestra las copias de ese `commondir`:
-
-| Dato | Para qué |
-| --- | --- |
-| ruta | abrir la pestaña o revelar la carpeta |
-| rama, o sha corto si `HEAD` está suelto | distinguirla del checkout actual |
-| bloqueada | un agente o `git worktree lock` impide borrarla |
-| carpeta ausente | la entrada sigue en `.git/worktrees` y la rama sigue ocupada |
-
-Acciones de cada fila: abrir, revelar, desbloquear, quitar. Quitar pide confirmación. Con cambios sin commit, la confirmación lo dice y hace falta una segunda aceptación (`force`). «Podar ausentes» recorre las que ya no tienen carpeta y libera la rama. Equivale a `git worktree prune`.
-
-Si dos carpetas tienen el mismo nombre, la pestaña muestra la rama o la carpeta padre. El nombre de hoy sale del último tramo de la ruta (`tabName` en `repo-tabs.ts`) y por eso dos copias se confunden.
-
-Checkout y borrado, cuando la rama está en otra copia, dicen la ruta: «`prueba` está abierta en `/ruta/GitHydra-prueba`». Borrar esa rama sigue prohibido hasta quitar el worktree.
-
-## Contrato
-
-Propuesta. No está en `packages/contracts`.
-
-```ts
-export interface LinkedWorktree {
-  path: string;
-  branch: string | null;
-  headSha: string;
-  isDetached: boolean;
-  locked: boolean;
-  missing: boolean;
-  isMain: boolean;
-}
-
-export interface AddWorktreeRequest {
-  directory: string;
-  branch: string;
-  sha: string | null;
-  createBranch: boolean;
-}
-```
-
-En `GitPort`:
-
-- `listWorktrees(path)`
-- `addWorktree(path, request)` devuelve el `RepositoryInfo` de la carpeta nueva, para abrir la pestaña con lo que ya existe
-- `removeWorktree(path, worktreePath, force)`
-- `unlockWorktree(path, worktreePath)`
-- `pruneWorktrees(path)`
-
-`path` es cualquier copia del repo. La lista sale del directorio común, así que se ve igual desde la carpeta principal y desde una copia.
-
-La implementación va en `apps/desktop/src-tauri/src/git/mod.rs`, con la API de worktree de `git2`. El proceso `git` solo se usa hoy para `credential fill`; esta iteración no añade otro camino por CLI salvo que `git2` no pueda expresar bloqueo, poda o «carpeta ausente».
-
-El MCP, si entra en la misma iteración, expone listar y abrir. Crear y borrar quedan en la ventana: un cliente externo que cree carpetas al lado del repo es justo el caso que esta lista tiene que hacer visible, y conviene no automatizarlo todavía.
-
-## Candado
-
-`with_repo` pasa a tomar la clave del `commondir` canónico, no de la carpeta de trabajo. Commit, fetch, alta de rama y alta de worktree de dos pestañas del mismo repo esperan el mismo mutex. El watch de `watch_roots` ya cubre los dos directorios; no hace falta un tercer watcher.
-
-## Copias para probar
-
-La pestaña es la instancia. No hace falta un segundo proceso de GitHydra.
-
-Una carpeta se queda en `main`. Otra, en una rama de prueba, con su install y su `pnpm dev` en otro puerto. Se pueden tener las dos pestañas abiertas y comparar. Cada copia usa una rama distinta. Para dos variantes del mismo commit, una es una rama nueva en ese punto (`createBranch: true`).
-
-Al crear, la UI avisa de que `.env` y las dependencias no se copian y de que el dev server de esa carpeta necesita otro puerto.
-
-## Copias que deja un agente
-
-Cursor y otros agentes crean worktrees para editar sin pisar el checkout abierto. GitHydra no los crea y no los esconde. Si comparten el `commondir`, salen en la lista. Hay que tolerar lo que suelen traer:
-
-- ruta fuera del proyecto, a menudo con un nombre hash;
-- `HEAD` suelto o una rama sintética;
-- `locked`, así que Quitar falla hasta Desbloquear;
-- árbol sin `node_modules` ni `.env`;
-- la rama del usuario ocupada, y por eso el checkout en la carpeta principal falla.
-
-Esas cuatro señales (ruta, rama o sha, bloqueo, carpeta ausente) son las columnas de la lista. Con eso se puede entrar, probar y quitar la copia cuando el agente terminó.
-
-Si alguien borra la carpeta a mano, la fila queda como ausente y «Podar ausentes» libera la rama.
-
-## Fuera de esta iteración
+## Qué deja fuera
 
 - Copiar `.env`, `node_modules` u otros archivos sin seguimiento.
 - Elegir el puerto del dev server.
 - Sparse checkout.
-- Reescribir las rutas absolutas de `gitdir` si el repo principal se mueve.
-- Repos bare.
+- Reparar el `gitdir` absoluto si el repo principal se mueve.
+- Repositorios bare.
 - Un worktree por submódulo.
-
-## Cómo probar la idea a mano
-
-Desde el repo, con la copia fuera del árbol:
-
-```bash
-git worktree add ../GitHydra-prueba -b prueba
-git worktree list --porcelain
-git worktree remove ../GitHydra-prueba
-git branch -d prueba
-```
-
-`list --porcelain` es la forma que la lista de la app tiene que igualar: un bloque por copia, con ruta, `HEAD`, `branch` o `detached`, y `locked` si existe.
-
-## Pruebas de esa iteración
-
-- Alta de una hermana, lista, pestaña nueva, quitar, y la rama nueva se puede borrar.
-- Checkout de una rama ocupada devuelve el mensaje con la ruta de la otra carpeta.
-- Borrar esa rama falla con el mismo mensaje.
-- Borrar la carpeta en disco y podar deja la rama libre.
-- Una copia bloqueada no se quita hasta desbloquearla.
-- Quitar con cambios sin commit exige la confirmación extra.
-- Dos pestañas del mismo `commondir` serializan un commit y un alta de rama.
-- Dos carpetas con el mismo nombre de tramo final se distinguen en la pestaña.
-- El destino dentro del propio árbol de trabajo se rechaza, o solo se acepta si esa ruta está ignorada.

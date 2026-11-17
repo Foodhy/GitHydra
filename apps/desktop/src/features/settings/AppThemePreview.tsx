@@ -151,7 +151,7 @@ function previewStyle(
     transform: `scale(${scale})`,
     display: "flex",
     flexDirection: "column",
-    background: tokens.surface,
+    backgroundColor: tokens.surface,
     color: tokens.text,
     borderColor: tokens.line,
     fontSize: style.id === "fino" ? "13.5px" : "13px",

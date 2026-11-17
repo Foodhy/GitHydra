@@ -1,12 +1,16 @@
-import type { BranchRef } from "@githydra/contracts";
+import type { BranchRef, LinkedWorktree } from "@githydra/contracts";
 import { Folder, GitBranch, Plus } from "lucide-react";
 import { type MouseEvent, useState } from "react";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { useBranches } from "../../hooks/useBranches";
+import { useWorktrees } from "../../hooks/useWorktrees";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { useT } from "../../lib/i18n";
 import { type OperationKind, runOperation } from "../../lib/run-operation";
 import { useOperation } from "../../stores/operation";
 import { ActivityFooter } from "./ActivityFooter";
+import { AddWorktreeDialog, type WorktreeSeed } from "./AddWorktreeDialog";
+import { WorktreeList } from "./WorktreeList";
 
 export function BranchPanel({
   path,
@@ -18,7 +22,9 @@ export function BranchPanel({
   onRepositoryChanged: () => Promise<void>;
 }) {
   const { branches, error, loading, refreshing } = useBranches(path, revision);
+  const { worktrees, error: worktreeError } = useWorktrees(path, revision);
   const running = useOperation((state) => state.running);
+  const tr = useT();
   const notice = useOperation((state) => state.notice);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -30,6 +36,7 @@ export function BranchPanel({
     items: MenuItem[];
   } | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [worktreeSeed, setWorktreeSeed] = useState<WorktreeSeed | null>(null);
   const selected = preferredKey(branches, selectedKey);
   const needle = query.trim().toLowerCase();
   const visible = branches.filter((branch) =>
@@ -85,14 +92,14 @@ export function BranchPanel({
       <div className="flex items-center gap-1 border-b border-line px-2 py-1.5">
         <input
           value={query}
-          placeholder="Filtrar ramas"
+          placeholder={tr("branch.filter")}
           onChange={(event) => setQuery(event.target.value)}
           className="min-w-0 flex-1 bg-transparent px-1 py-1 text-xs outline-none placeholder:text-muted"
         />
         <button
           type="button"
-          title="Nueva rama"
-          aria-label="Nueva rama"
+          title={tr("branch.new")}
+          aria-label={tr("branch.new")}
           onClick={() => setCreating((open) => !open)}
           className="rounded p-1 text-muted hover:bg-surface-overlay hover:text-text"
         >
@@ -110,7 +117,7 @@ export function BranchPanel({
             }
             void runOperation(
               "other",
-              "Creando rama",
+              tr("branch.creating"),
               async () => {
                 await tauriGit.createBranch(path, nextName);
                 setName("");
@@ -123,7 +130,7 @@ export function BranchPanel({
           <input
             value={name}
             disabled={running}
-            placeholder="Nueva rama"
+            placeholder={tr("branch.new")}
             onChange={(event) => setName(event.target.value)}
             className="min-w-0 flex-1 rounded border border-line bg-surface px-2 py-1 text-xs"
           />
@@ -132,24 +139,26 @@ export function BranchPanel({
             disabled={running || name.trim().length === 0}
             className="rounded px-2 py-1 text-xs text-accent disabled:text-muted"
           >
-            Crear
+            {tr("branch.create")}
           </button>
         </form>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto py-1">
         {loading && branches.length === 0 ? (
-          <p className="px-3 text-xs text-muted">Cargando…</p>
+          <p className="px-3 text-xs text-muted">{tr("branch.loading")}</p>
         ) : null}
         {error ? <p className="px-3 text-xs text-warn">{error}</p> : null}
         {notice && notice !== "Cancelado" ? (
           <p className="px-3 text-xs text-warn">{notice}</p>
         ) : null}
         {refreshing ? (
-          <p className="px-3 text-[11px] text-muted">Actualizando ramas…</p>
+          <p className="px-3 text-[11px] text-muted">
+            {tr("branch.refreshing")}
+          </p>
         ) : null}
         {local.length > 0 ? (
           <BranchGroup
-            title="Local"
+            title={tr("branch.local")}
             branches={local}
             folded={folded.Local === true}
             folderOpen={folderOpen}
@@ -160,6 +169,7 @@ export function BranchPanel({
             selectedKey={selected}
             onSelect={selectBranch}
             onOpen={openMenu}
+            hintFor={(branch) => occupiedPath(branch, worktrees)}
           />
         ) : null}
         {remoteNames.map((remote) => (
@@ -179,13 +189,21 @@ export function BranchPanel({
             selectedKey={selected}
             onSelect={selectBranch}
             onOpen={openMenu}
+            hintFor={(branch) => occupiedPath(branch, worktrees)}
           />
         ))}
         {!loading && visible.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted">
-            {branches.length === 0 ? "Sin ramas" : "Ninguna rama coincide"}
+            {branches.length === 0 ? tr("branch.empty") : tr("branch.none")}
           </p>
         ) : null}
+        <WorktreeList
+          path={path}
+          worktrees={worktrees}
+          error={worktreeError}
+          running={running}
+          onRepositoryChanged={onRepositoryChanged}
+        />
       </div>
       <ActivityFooter />
       {menu ? (
@@ -196,6 +214,14 @@ export function BranchPanel({
           onClose={() => setMenu(null)}
         />
       ) : null}
+      {worktreeSeed ? (
+        <AddWorktreeDialog
+          path={path}
+          seed={worktreeSeed}
+          onClose={() => setWorktreeSeed(null)}
+          onRepositoryChanged={onRepositoryChanged}
+        />
+      ) : null}
     </aside>
   );
 
@@ -204,90 +230,109 @@ export function BranchPanel({
     return [
       {
         id: "checkout",
-        label: "Checkout",
+        label: tr("branch.checkout"),
         disabled: !local || branch.isHead || running,
         onSelect: () => {
-          void run("checkout", `Cambiando a ${shortName(branch)}`, () =>
-            tauriGit.checkoutBranch(path, branch.name),
+          void run(
+            "checkout",
+            tr("branch.checkingOut", { name: shortName(branch) }),
+            () => tauriGit.checkoutBranch(path, branch.name),
           );
         },
       },
       {
         id: "pull",
-        label: "Pull",
+        label: tr("branch.pull"),
         disabled: !branch.isHead || running,
         onSelect: () => {
-          void run("pull", "Pull", () => tauriGit.pull(path));
+          void run("pull", tr("branch.pull"), () => tauriGit.pull(path));
         },
       },
       {
         id: "push",
-        label: "Push",
+        label: tr("branch.push"),
         disabled: !branch.isHead || running,
         onSelect: () => {
-          void run("push", "Push", () => tauriGit.push(path));
+          void run("push", tr("branch.push"), () => tauriGit.push(path));
+        },
+      },
+      {
+        id: "worktree",
+        label: tr("branch.worktree"),
+        disabled: !branch.tipSha || running,
+        onSelect: () => {
+          setWorktreeSeed({
+            branch: shortName(branch),
+            sha: branch.tipSha,
+            createBranch: branch.remote !== null,
+          });
         },
       },
       {
         id: "create",
-        label: "Crear rama aquí",
+        label: tr("branch.createHere"),
         disabled: !branch.tipSha || running,
         onSelect: () => {
-          const nextName = window.prompt("Nombre de la nueva rama");
+          const nextName = window.prompt(tr("branch.askName"));
           const tip = branch.tipSha;
           if (!nextName || !tip) {
             return;
           }
-          void run("other", "Creando rama", () =>
+          void run("other", tr("branch.creating"), () =>
             tauriGit.createBranchAt(path, nextName, tip),
           );
         },
       },
       {
         id: "rename",
-        label: "Renombrar",
+        label: tr("branch.rename"),
         disabled: !local || running,
         onSelect: () => {
-          const nextName = window.prompt("Nuevo nombre", shortName(branch));
+          const nextName = window.prompt(
+            tr("branch.askRename"),
+            shortName(branch),
+          );
           if (!nextName || nextName.trim() === branch.name) {
             return;
           }
-          void run("other", "Renombrando rama", () =>
+          void run("other", tr("branch.renaming"), () =>
             tauriGit.renameBranch(path, branch.name, nextName),
           );
         },
       },
       {
         id: "upstream",
-        label: "Upstream",
+        label: tr("branch.upstream"),
         disabled: !local || running,
         onSelect: () => {
-          const upstream = window.prompt("Upstream (origen/rama)", "origin/");
+          const upstream = window.prompt(tr("branch.askUpstream"), "origin/");
           if (!upstream) {
             return;
           }
-          void run("other", "Actualizando upstream", () =>
+          void run("other", tr("branch.updatingUpstream"), () =>
             tauriGit.setUpstream(path, branch.name, upstream),
           );
         },
       },
       {
         id: "copy",
-        label: "Copiar nombre",
+        label: tr("branch.copyName"),
         onSelect: () => {
           void navigator.clipboard.writeText(branch.name);
         },
       },
       {
         id: "delete",
-        label: "Borrar",
+        label: tr("branch.delete"),
         danger: true,
         disabled: !local || branch.isHead || running,
         onSelect: () => {
-          if (!window.confirm(`¿Borrar la rama ${branch.name}?`)) {
+          if (
+            !window.confirm(tr("branch.confirmDelete", { name: branch.name }))
+          ) {
             return;
           }
-          void run("other", "Borrando rama", () =>
+          void run("other", tr("branch.deleting"), () =>
             tauriGit.deleteBranch(path, branch.name),
           );
         },
@@ -313,6 +358,24 @@ function preferredKey(
   return head ? branchKey(head) : null;
 }
 
+function occupiedPath(
+  branch: BranchRef,
+  worktrees: LinkedWorktree[],
+): string | null {
+  if (branch.remote !== null) {
+    return null;
+  }
+  return (
+    worktrees.find((copy) => copy.branch === branch.name && !copy.isCurrent)
+      ?.path ?? null
+  );
+}
+
+function shortPath(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts.slice(-2).join("/");
+}
+
 function shortName(branch: BranchRef): string {
   if (!branch.remote) {
     return branch.name;
@@ -333,6 +396,7 @@ function BranchGroup({
   onToggleFolder,
   onSelect,
   onOpen,
+  hintFor,
 }: {
   title: string;
   branches: BranchRef[];
@@ -343,6 +407,7 @@ function BranchGroup({
   onToggleFolder: (folder: string) => void;
   onSelect: (branch: BranchRef) => void;
   onOpen: (branch: BranchRef, event: MouseEvent) => void;
+  hintFor: (branch: BranchRef) => string | null;
 }) {
   const tree = organize(branches);
   return (
@@ -362,6 +427,7 @@ function BranchGroup({
             <BranchRow
               branch={tree.pinned}
               label={shortName(tree.pinned)}
+              hint={hintFor(tree.pinned)}
               selected={branchKey(tree.pinned) === selectedKey}
               onSelect={onSelect}
               onOpen={onOpen}
@@ -372,6 +438,7 @@ function BranchGroup({
               key={branchKey(branch)}
               branch={branch}
               label={shortName(branch)}
+              hint={hintFor(branch)}
               selected={branchKey(branch) === selectedKey}
               onSelect={onSelect}
               onOpen={onOpen}
@@ -398,6 +465,7 @@ function BranchGroup({
                         key={branchKey(branch)}
                         branch={branch}
                         label={labelInFolder(branch, folder.name)}
+                        hint={hintFor(branch)}
                         indent
                         selected={branchKey(branch) === selectedKey}
                         onSelect={onSelect}
@@ -418,6 +486,7 @@ function BranchGroup({
 function BranchRow({
   branch,
   label,
+  hint,
   indent = false,
   selected,
   onSelect,
@@ -425,6 +494,7 @@ function BranchRow({
 }: {
   branch: BranchRef;
   label: string;
+  hint: string | null;
   indent?: boolean;
   selected: boolean;
   onSelect: (branch: BranchRef) => void;
@@ -454,6 +524,14 @@ function BranchRow({
       >
         <GitBranch size={13} className="shrink-0" />
         <span className="truncate">{label}</span>
+        {hint ? (
+          <span
+            className="ml-auto max-w-[45%] truncate font-mono text-[10px] text-muted"
+            title={hint}
+          >
+            {shortPath(hint)}
+          </span>
+        ) : null}
       </button>
     </li>
   );

@@ -11,6 +11,15 @@ Desktop Git client for macOS. This release is the foundation: open a repository,
 - Rust stable (rustfmt and clippy)
 - CMake (required by `git2` / libgit2 at compile time)
 
+## Install
+
+```bash
+pnpm install
+pnpm install-app
+```
+
+Open a folder from the window. The first repository view shows the Cursor config. Copy it into `.cursor/mcp.json` and restart Cursor. The agent can stage files and propose a commit message in this repo. **Confirm** in the window is still the commit.
+
 ## Commands
 
 ```bash
@@ -22,6 +31,6 @@ pnpm mcp          # MCP server over stdio
 pnpm check        # Biome, format, clippy, and tests
 ```
 
-Apple code signing for distributing the `.app` off this machine is out of scope for this phase.
+Apple code signing for distributing the `.app` off this machine is out of scope for this phase. Building on Windows is not set up; the gaps are in [docs/WINDOWS.md](docs/WINDOWS.md).
 
 Build order is in [docs/ROADMAP.md](docs/ROADMAP.md). Layering is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); MCP in [packages/mcp/README.md](packages/mcp/README.md).

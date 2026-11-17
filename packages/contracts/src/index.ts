@@ -102,6 +102,38 @@ export interface StashEntry {
   stashedAt: string;
 }
 
+/** Copia enlazada de un mismo repositorio. No es el estado del árbol. */
+export interface CommitProposal {
+  summary: string;
+  description: string;
+}
+
+export interface ShowDiffRequest {
+  file: string;
+  staged: boolean;
+  missing: boolean;
+}
+
+export interface LinkedWorktree {
+  path: string;
+  branch: string | null;
+  headSha: string | null;
+  isDetached: boolean;
+  locked: boolean;
+  lockReason: string | null;
+  missing: boolean;
+  isMain: boolean;
+  isCurrent: boolean;
+  situation: string;
+}
+
+export interface AddWorktreeRequest {
+  directory: string;
+  branch: string;
+  sha: string | null;
+  createBranch: boolean;
+}
+
 /**
  * Puerto de lectura git. La UI y el servidor MCP hablan esta forma;
  * la implementación de escritorio vive en Rust (`git2`).
@@ -166,6 +198,20 @@ export interface GitPort {
   applyStash(path: string, index: number): Promise<void>;
   popStash(path: string, index: number): Promise<void>;
   dropStash(path: string, index: number): Promise<void>;
+  readCommitProposal(path: string): Promise<CommitProposal | null>;
+  takeShowDiff(path: string): Promise<ShowDiffRequest | null>;
+  listWorktrees(path: string): Promise<LinkedWorktree[]>;
+  addWorktree(
+    path: string,
+    request: AddWorktreeRequest,
+  ): Promise<RepositoryInfo>;
+  removeWorktree(
+    path: string,
+    worktreePath: string,
+    force: boolean,
+  ): Promise<void>;
+  unlockWorktree(path: string, worktreePath: string): Promise<void>;
+  pruneWorktrees(path: string): Promise<void>;
 }
 
 export const SCRIPTS_FILE = ".githydra/scripts.json";
@@ -173,13 +219,33 @@ export const SCRIPT_NAME_LIMIT = 40;
 export const SCRIPT_COMMAND_LIMIT = 500;
 export const SCRIPT_PIN_LIMIT = 3;
 
+export const SCRIPT_ICONS = [
+  "eraser",
+  "play",
+  "terminal",
+  "git-branch",
+  "package",
+  "bug",
+  "hammer",
+  "refresh-cw",
+  "search",
+  "sparkles",
+] as const;
+
+export type ScriptIcon = (typeof SCRIPT_ICONS)[number];
+
 export interface ProjectScripts {
   pinned: string[];
   scripts: Record<string, string>;
+  icons: Partial<Record<string, ScriptIcon>>;
 }
 
 export function emptyScripts(): ProjectScripts {
-  return { pinned: [], scripts: {} };
+  return { pinned: [], scripts: {}, icons: {} };
+}
+
+export function isScriptIcon(value: string): value is ScriptIcon {
+  return (SCRIPT_ICONS as readonly string[]).includes(value);
 }
 
 export function parseScripts(
@@ -194,7 +260,11 @@ export function parseScripts(
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { error: "scripts.json tiene que ser un objeto." };
   }
-  const record = raw as { pinned?: unknown; scripts?: unknown };
+  const record = raw as {
+    pinned?: unknown;
+    scripts?: unknown;
+    icons?: unknown;
+  };
   if (
     !record.scripts ||
     typeof record.scripts !== "object" ||
@@ -225,7 +295,26 @@ export function parseScripts(
       pinned.push(name);
     }
   }
-  return { book: { pinned, scripts } };
+  const icons: Partial<Record<string, ScriptIcon>> = {};
+  if (record.icons !== undefined) {
+    if (
+      !record.icons ||
+      typeof record.icons !== "object" ||
+      Array.isArray(record.icons)
+    ) {
+      return { error: "icons tiene que ser un objeto." };
+    }
+    for (const [name, icon] of Object.entries(record.icons)) {
+      if (!hasKey(scripts, name) || typeof icon !== "string") {
+        continue;
+      }
+      if (!isScriptIcon(icon)) {
+        return { error: `Icono desconocido: ${icon}` };
+      }
+      icons[name] = icon;
+    }
+  }
+  return { book: { pinned, scripts, icons } };
 }
 
 export function serializeScripts(book: ProjectScripts): string {
@@ -233,7 +322,14 @@ export function serializeScripts(book: ProjectScripts): string {
   for (const name of Object.keys(book.scripts).sort()) {
     scripts[name] = book.scripts[name] ?? "";
   }
-  return `${JSON.stringify({ pinned: book.pinned, scripts }, null, 2)}\n`;
+  const icons: Partial<Record<string, ScriptIcon>> = {};
+  for (const name of Object.keys(book.icons).sort()) {
+    const icon = book.icons[name];
+    if (icon && hasKey(scripts, name)) {
+      icons[name] = icon;
+    }
+  }
+  return `${JSON.stringify({ pinned: book.pinned, scripts, icons }, null, 2)}\n`;
 }
 
 function hasKey(record: Record<string, string>, name: string): boolean {
@@ -281,15 +377,23 @@ export function putScript(
   book: ProjectScripts,
   name: string,
   command: string,
+  icon?: ScriptIcon | null,
 ): { book: ProjectScripts } | { error: string } {
   const problem = scriptProblem(name, command);
   if (problem) {
     return { error: problem };
   }
+  const icons = { ...book.icons };
+  if (icon) {
+    icons[name] = icon;
+  } else if (icon === null) {
+    delete icons[name];
+  }
   return {
     book: {
       pinned: book.pinned,
       scripts: { ...book.scripts, [name]: command.trim() },
+      icons,
     },
   };
 }
@@ -300,8 +404,11 @@ export function removeScript(
 ): ProjectScripts {
   const scripts = { ...book.scripts };
   delete scripts[name];
+  const icons = { ...book.icons };
+  delete icons[name];
   return {
     scripts,
+    icons,
     pinned: book.pinned.filter((item) => item !== name),
   };
 }
