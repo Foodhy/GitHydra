@@ -2,13 +2,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { Plus, X } from "lucide-react";
+import { Eraser, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
+import { type ProjectScripts, visiblePins } from "@githydra/contracts";
+import { loadProjectScripts } from "../../lib/project-scripts";
 import { useOverlay } from "../../stores/overlay";
 import { pathFromDrop, shellToken, TERMINAL_INSERT } from "./insert";
 import { withCarriageReturn } from "./newline";
+import {
+  applyRuns,
+  pullJobs,
+  pushJob,
+  releaseHeld,
+  TERMINAL_RUN,
+  type TerminalJob,
+  takeRuns,
+} from "./run";
 import {
   addTerminal,
   closeTerminal,
@@ -22,7 +33,13 @@ import {
   type TerminalTab,
 } from "./sessions";
 
-export function TerminalPanel({ path }: { path: string }) {
+export function TerminalPanel({
+  path,
+  revision,
+}: {
+  path: string;
+  revision: number;
+}) {
   const [tracked, setTracked] = useState(path);
   const [tabs, setTabs] = useState<TerminalTab[]>(() =>
     loadTerminals(localStorage, path),
@@ -45,6 +62,50 @@ export function TerminalPanel({ path }: { path: string }) {
     top: number;
     left: number;
   } | null>(null);
+  const [scripts, setScripts] = useState<ProjectScripts | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const current = revision;
+    loadProjectScripts(path)
+      .then((book) => {
+        if (!cancelled && current === revision) {
+          setScripts(book);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setScripts(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, revision]);
+
+  useEffect(() => {
+    function onRun() {
+      const requests = takeRuns();
+      if (requests.length === 0) {
+        return;
+      }
+      let active: string | null = null;
+      setTabs((current) => {
+        const applied = applyRuns(current, requests, () => crypto.randomUUID());
+        for (const job of applied.jobs) {
+          pushJob(job.tabId, job.job);
+        }
+        active = applied.active;
+        return applied.tabs;
+      });
+      if (active) {
+        setActiveId(active);
+      }
+    }
+    window.addEventListener(TERMINAL_RUN, onRun);
+    onRun();
+    return () => window.removeEventListener(TERMINAL_RUN, onRun);
+  }, []);
 
   if (tracked !== path) {
     const next = loadTerminals(localStorage, path);
@@ -175,6 +236,42 @@ export function TerminalPanel({ path }: { path: string }) {
         >
           <Plus size={13} />
         </button>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            title="Limpiar"
+            aria-label="Limpiar terminal"
+            disabled={!activeId}
+            onClick={() => {
+              pushJob(activeId, { text: "clear\r", clear: true });
+              window.dispatchEvent(new CustomEvent(TERMINAL_RUN));
+            }}
+            className="rounded px-1.5 py-0.5 text-[11px] text-muted hover:bg-surface-overlay hover:text-text disabled:opacity-40"
+          >
+            <Eraser size={12} />
+          </button>
+          {scripts
+            ? visiblePins(scripts).map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  title={scripts.scripts[name]}
+                  disabled={!activeId}
+                  onClick={() => {
+                    const command = scripts.scripts[name];
+                    if (!command || !activeId) {
+                      return;
+                    }
+                    pushJob(activeId, { text: `${command}\r`, clear: false });
+                    window.dispatchEvent(new CustomEvent(TERMINAL_RUN));
+                  }}
+                  className="max-w-28 truncate rounded px-1.5 py-0.5 text-[11px] text-text hover:bg-surface-overlay disabled:opacity-40"
+                >
+                  {name}
+                </button>
+              ))
+            : null}
+        </div>
       </div>
       <div className="relative min-h-0 flex-1">
         {tabs.length === 0 ? (
@@ -189,6 +286,7 @@ export function TerminalPanel({ path }: { path: string }) {
           tabs.map((tab) => (
             <TerminalSession
               key={`${tracked}:${tab.id}`}
+              tabId={tab.id}
               path={tracked}
               active={tab.id === activeId}
               color={tab.color}
@@ -219,10 +317,12 @@ export function TerminalPanel({ path }: { path: string }) {
 }
 
 function TerminalSession({
+  tabId,
   path,
   active,
   color,
 }: {
+  tabId: string;
   path: string;
   active: boolean;
   color: string;
@@ -259,6 +359,7 @@ function TerminalSession({
     term.loadAddon(fit);
     term.open(element);
     const session = { id: 0, closed: false };
+    const held: TerminalJob[] = [];
     const stops: Array<() => void> = [];
 
     function writeInput(data: string) {
@@ -266,6 +367,20 @@ function TerminalSession({
         return;
       }
       void invoke("pty_write", { id: session.id, data });
+    }
+    function deliver(incoming: TerminalJob[]) {
+      const released = releaseHeld(session.id !== 0, [...held, ...incoming]);
+      held.length = 0;
+      held.push(...released.hold);
+      for (const job of released.send) {
+        if (job.clear) {
+          term.clear();
+        }
+        writeInput(job.text);
+      }
+    }
+    function flush() {
+      deliver(pullJobs(tabId));
     }
     term.onData((data) => {
       writeInput(data);
@@ -280,6 +395,8 @@ function TerminalSession({
       }
     };
     window.addEventListener(TERMINAL_INSERT, onInsert);
+    window.addEventListener(TERMINAL_RUN, flush);
+    flush();
     const onDragOver = (event: DragEvent) => {
       if (event.dataTransfer?.types.includes("text/plain")) {
         event.preventDefault();
@@ -346,6 +463,7 @@ function TerminalSession({
         return;
       }
       session.id = id;
+      flush();
       if (term.cols >= 2 && term.rows >= 2) {
         void invoke("pty_resize", {
           id,
@@ -363,6 +481,7 @@ function TerminalSession({
       termRef.current = null;
       fitRef.current = null;
       window.removeEventListener(TERMINAL_INSERT, onInsert);
+      window.removeEventListener(TERMINAL_RUN, flush);
       element.removeEventListener("dragover", onDragOver);
       element.removeEventListener("drop", onDrop);
       observer.disconnect();
@@ -374,7 +493,7 @@ function TerminalSession({
       }
       term.dispose();
     };
-  }, [path]);
+  }, [path, tabId]);
 
   useEffect(() => {
     const term = termRef.current;

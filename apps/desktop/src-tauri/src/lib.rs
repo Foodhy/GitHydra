@@ -577,6 +577,11 @@ fn search_workdir(path: String, query: String) -> Result<Vec<String>, git::GitEr
 }
 
 #[tauri::command]
+fn index_workdir(path: String) -> Result<git::files::WorkdirIndex, git::GitError> {
+    in_repo(&path, || git::files::index_workdir(&path))
+}
+
+#[tauri::command]
 fn create_workdir_file(
     path: String,
     directory: String,
@@ -601,6 +606,11 @@ fn create_workdir_dir(
 #[tauri::command]
 fn rename_workdir(path: String, file: String, name: String) -> Result<String, git::GitError> {
     in_repo(&path, || git::files::rename_workdir(&path, &file, &name))
+}
+
+#[tauri::command]
+fn move_workdir(path: String, file: String, directory: String) -> Result<String, git::GitError> {
+    in_repo(&path, || git::files::move_workdir(&path, &file, &directory))
 }
 
 #[tauri::command]
@@ -710,9 +720,11 @@ pub fn run() {
             read_workdir_file,
             write_workdir_file,
             search_workdir,
+            index_workdir,
             create_workdir_file,
             create_workdir_dir,
             rename_workdir,
+            move_workdir,
             remove_workdir,
             cancel_git_operation,
             set_dock_activity,

@@ -6,6 +6,7 @@ import {
   Globe,
   History,
   type LucideIcon,
+  ScrollText,
   SquareTerminal,
 } from "lucide-react";
 import {
@@ -17,9 +18,16 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { useFileIndex } from "../../hooks/useFileIndex";
 import { useRepoSync } from "../../hooks/useRepoSync";
-import { bindTerminalPanel, syncWindowPanels } from "../../lib/file-menu";
+import {
+  bindScriptsPanel,
+  bindTerminalPanel,
+  syncWindowPanels,
+} from "../../lib/file-menu";
 import { tauriGit } from "../../lib/git/tauri-git-adapter";
+import { useCommandUi } from "../../stores/command-ui";
+import { useOverlay } from "../../stores/overlay";
 import { useRepoSession } from "../../stores/repo-session";
 import { BranchPanel } from "../branches/BranchPanel";
 import {
@@ -31,8 +39,11 @@ import {
 import { CommitDiffPanel } from "../diff/CommitDiffPanel";
 import { WorkDiffPanel, type WorkFile } from "../diff/WorkDiffPanel";
 import { EditorPanel } from "../editor/EditorPanel";
+import { QuickOpen } from "../editor/QuickOpen";
 import { HistoryPanel } from "../history/HistoryPanel";
+import { ScriptsPanel } from "../scripts/ScriptsPanel";
 import { StagingPanel } from "../staging/StagingPanel";
+import { TERMINAL_RUN } from "../terminal/run";
 import { TerminalSlot, useTerminalHost } from "../terminal/TerminalChrome";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { bindCenterViews } from "./center-views";
@@ -61,6 +72,7 @@ const PANEL_ICON: Record<PanelId, LucideIcon> = {
   browser: Globe,
   changes: FileDiff,
   terminal: SquareTerminal,
+  scripts: ScrollText,
 };
 
 export function WorkspaceShell({ path }: { path: string }) {
@@ -113,6 +125,39 @@ export function WorkspaceShell({ path }: { path: string }) {
     },
     [openTarget],
   );
+  const quickOpen = useCommandUi((state) => state.quickOpen);
+  const quickOpenTick = useCommandUi((state) => state.quickOpenTick);
+
+  useEffect(() => {
+    if (!path) {
+      return;
+    }
+    useCommandUi.getState().hideQuickOpen();
+    return () => {
+      useCommandUi.getState().hideQuickOpen();
+    };
+  }, [path]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "p") {
+        return;
+      }
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+        return;
+      }
+      const showing = useCommandUi.getState().quickOpen;
+      const overlay = useOverlay.getState().depth;
+      if (overlay > (showing ? 1 : 0)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      useCommandUi.getState().showQuickOpen();
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   async function refreshRepository() {
     const repo = await tauriGit.openRepository(path);
@@ -134,8 +179,25 @@ export function WorkspaceShell({ path }: { path: string }) {
     });
   }, []);
 
+  useEffect(() => {
+    return bindScriptsPanel(() => {
+      setTree((current) => openPanel(current, "scripts"));
+    });
+  }, []);
+
+  useEffect(() => {
+    function onRun() {
+      setTree((current) => restoreTerminal(current));
+    }
+    window.addEventListener(TERMINAL_RUN, onRun);
+    return () => window.removeEventListener(TERMINAL_RUN, onRun);
+  }, []);
+
+  const fileIndex = useFileIndex(path, revision);
+
   const open = centerOpen(tree);
   const terminalOpen = findPane(tree, "terminal") !== null;
+  const scriptsOpen = findPane(tree, "scripts") !== null;
 
   useEffect(() => {
     syncWindowPanels({
@@ -146,8 +208,9 @@ export function WorkspaceShell({ path }: { path: string }) {
         browser: open.browser,
       },
       terminal: terminalOpen,
+      scripts: scriptsOpen,
     });
-  }, [open.browser, open.editor, open.history, terminalOpen]);
+  }, [open.browser, open.editor, open.history, scriptsOpen, terminalOpen]);
 
   useEffect(() => {
     return () => {
@@ -157,6 +220,7 @@ export function WorkspaceShell({ path }: { path: string }) {
         enabled: false,
         open: { history: false, editor: false, browser: false },
         terminal: false,
+        scripts: false,
       });
     };
   }, []);
@@ -264,6 +328,18 @@ export function WorkspaceShell({ path }: { path: string }) {
           sha={editorTarget?.sha ?? null}
           requestId={editorTarget?.id ?? 0}
           onRepositoryChanged={refreshRepository}
+          indexed={fileIndex.files}
+          indexReady={fileIndex.ready}
+          onRefreshIndex={fileIndex.refresh}
+        />
+      );
+    }
+    if (panel === "scripts") {
+      return (
+        <ScriptsPanel
+          path={path}
+          revision={revision}
+          onRepositoryChanged={refreshRepository}
         />
       );
     }
@@ -297,7 +373,12 @@ export function WorkspaceShell({ path }: { path: string }) {
           }
           content={paneContent}
         />
-        {ready ? createPortal(<TerminalPanel path={path} />, container) : null}
+        {ready
+          ? createPortal(
+              <TerminalPanel path={path} revision={revision} />,
+              container,
+            )
+          : null}
         {open.browser && browserHost.ready
           ? createPortal(
               <BrowserPanel active={browserActive} />,
@@ -305,6 +386,21 @@ export function WorkspaceShell({ path }: { path: string }) {
             )
           : null}
       </div>
+      {quickOpen ? (
+        <QuickOpen
+          path={path}
+          focusTick={quickOpenTick}
+          indexed={fileIndex.files}
+          ready={fileIndex.ready}
+          truncated={fileIndex.truncated}
+          indexError={fileIndex.error}
+          onOpen={(file) => {
+            useCommandUi.getState().hideQuickOpen();
+            editWorkFile(file);
+          }}
+          onClose={() => useCommandUi.getState().hideQuickOpen()}
+        />
+      ) : null}
     </div>
   );
 }
@@ -406,7 +502,8 @@ function canClose(panel: PanelId): boolean {
     panel === "history" ||
     panel === "editor" ||
     panel === "browser" ||
-    panel === "terminal"
+    panel === "terminal" ||
+    panel === "scripts"
   );
 }
 

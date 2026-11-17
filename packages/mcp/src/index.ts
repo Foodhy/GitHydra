@@ -5,6 +5,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { GitToolError, listCommits, repoInfo, workingTree } from "./git.js";
+import { addScript, listScripts } from "./scripts.js";
 import { readSessionPath, resolveRepoPath } from "./session.js";
 
 /**
@@ -57,6 +58,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: "githydra_list_scripts",
+      description:
+        "Scripts del repo en .githydra/scripts.json. No los ejecuta.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "githydra_add_script",
+      description:
+        "Agrega o reemplaza un script en .githydra/scripts.json. No lo ejecuta.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          name: { type: "string" },
+          command: { type: "string" },
+        },
+        required: ["name", "command"],
+      },
+    },
   ],
 }));
 
@@ -86,6 +112,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
       case "githydra_working_tree":
         return json(workingTree(path));
+      case "githydra_list_scripts":
+        return json(listScripts(path));
+      case "githydra_add_script": {
+        const name = stringArg(request.params.arguments?.name);
+        const command = stringArg(request.params.arguments?.command);
+        if (!name || !command) {
+          return textError("Faltan name y command.");
+        }
+        return json(addScript(path, name, command));
+      }
       default:
         return textError(`Herramienta desconocida: ${request.params.name}`);
     }

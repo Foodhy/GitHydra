@@ -29,24 +29,29 @@ interface ToggleItems {
   editor: MenuItem;
   terminal: MenuItem;
   finder: MenuItem;
+  quickOpen: MenuItem;
 }
 
 let toggles: ToggleItems | null = null;
 let panels:
   | (Record<CenterView, CheckMenuItem> & {
       terminal: CheckMenuItem;
+      scripts: CheckMenuItem;
     })
   | null = null;
 let pending: Promise<void> | null = null;
 let showTerminal: (() => void) | null = null;
+let showScripts: (() => void) | null = null;
 let panelState: {
   enabled: boolean;
   open: Record<CenterView, boolean>;
   terminal: boolean;
+  scripts: boolean;
 } = {
   enabled: false,
   open: { history: false, editor: false, browser: false },
   terminal: false,
+  scripts: false,
 };
 
 export function bindTerminalPanel(show: () => void): () => void {
@@ -58,10 +63,20 @@ export function bindTerminalPanel(show: () => void): () => void {
   };
 }
 
+export function bindScriptsPanel(show: () => void): () => void {
+  showScripts = show;
+  return () => {
+    if (showScripts === show) {
+      showScripts = null;
+    }
+  };
+}
+
 export function syncWindowPanels(state: {
   enabled: boolean;
   open: Record<CenterView, boolean>;
   terminal: boolean;
+  scripts: boolean;
 }): void {
   panelState = state;
   if (!panels) {
@@ -73,6 +88,8 @@ export function syncWindowPanels(state: {
   }
   void panels.terminal.setEnabled(state.enabled);
   void panels.terminal.setChecked(state.enabled && state.terminal);
+  void panels.scripts.setEnabled(state.enabled);
+  void panels.scripts.setChecked(state.enabled && state.scripts);
 }
 
 export function syncFileMenu(state: {
@@ -86,6 +103,7 @@ export function syncFileMenu(state: {
   void toggles.editor.setEnabled(state.hasRepo);
   void toggles.terminal.setEnabled(state.hasRepo);
   void toggles.finder.setEnabled(state.hasRepo);
+  void toggles.quickOpen.setEnabled(state.hasRepo);
 }
 
 export function installFileMenu(): Promise<void> {
@@ -125,6 +143,13 @@ async function createFileMenu(): Promise<void> {
     enabled: false,
     action: () => run(revealActiveRepo),
   });
+  const quickOpen = await MenuItem.new({
+    id: "quick-open",
+    text: "Ir al archivo…",
+    accelerator: "CmdOrCtrl+P",
+    enabled: false,
+    action: () => useCommandUi.getState().showQuickOpen(),
+  });
   const historyPanel = await panelItem("show-history", "Historial", "history");
   const editorPanel = await panelItem("show-editor", "Editor", "editor");
   const browserPanel = await panelItem("show-browser", "Browser", "browser");
@@ -139,6 +164,19 @@ async function createFileMenu(): Promise<void> {
         void item.setChecked(true);
       }
       run(showTerminalPanel);
+    },
+  });
+  const scriptsPanel = await CheckMenuItem.new({
+    id: "show-scripts-panel",
+    text: "Scripts",
+    checked: false,
+    enabled: false,
+    action: () => {
+      const item = panels?.scripts;
+      if (item) {
+        void item.setChecked(true);
+      }
+      run(showScriptsPanel);
     },
   });
 
@@ -176,6 +214,7 @@ async function createFileMenu(): Promise<void> {
         accelerator: "CmdOrCtrl+O",
         action: () => run(openChosenFolder),
       }),
+      quickOpen,
       await MenuItem.new({
         id: "repo-management",
         text: "Gestión de repositorios",
@@ -210,17 +249,19 @@ async function createFileMenu(): Promise<void> {
         editorPanel,
         browserPanel,
         terminalPanel,
+        scriptsPanel,
       ]);
     }
   }
   await menu.insert(file, insertAt);
   const previous = await menu.setAsAppMenu();
-  toggles = { reopen, editor, terminal, finder };
+  toggles = { reopen, editor, terminal, finder, quickOpen };
   panels = {
     history: historyPanel,
     editor: editorPanel,
     browser: browserPanel,
     terminal: terminalPanel,
+    scripts: scriptsPanel,
   };
   syncWindowPanels(panelState);
   await previous?.close();
@@ -248,6 +289,10 @@ function panelItem(
 
 function showTerminalPanel(): void {
   showTerminal?.();
+}
+
+function showScriptsPanel(): void {
+  showScripts?.();
 }
 
 function run(action: () => void | Promise<void>): void {

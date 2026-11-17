@@ -167,3 +167,166 @@ export interface GitPort {
   popStash(path: string, index: number): Promise<void>;
   dropStash(path: string, index: number): Promise<void>;
 }
+
+export const SCRIPTS_FILE = ".githydra/scripts.json";
+export const SCRIPT_NAME_LIMIT = 40;
+export const SCRIPT_COMMAND_LIMIT = 500;
+export const SCRIPT_PIN_LIMIT = 3;
+
+export interface ProjectScripts {
+  pinned: string[];
+  scripts: Record<string, string>;
+}
+
+export function emptyScripts(): ProjectScripts {
+  return { pinned: [], scripts: {} };
+}
+
+export function parseScripts(
+  text: string,
+): { book: ProjectScripts } | { error: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { error: "scripts.json no es JSON válido." };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { error: "scripts.json tiene que ser un objeto." };
+  }
+  const record = raw as { pinned?: unknown; scripts?: unknown };
+  if (
+    !record.scripts ||
+    typeof record.scripts !== "object" ||
+    Array.isArray(record.scripts)
+  ) {
+    return { error: "Falta el objeto scripts." };
+  }
+  const scripts: Record<string, string> = {};
+  for (const [name, command] of Object.entries(record.scripts)) {
+    const problem = scriptProblem(name, command);
+    if (problem) {
+      return { error: problem };
+    }
+    scripts[name] = (command as string).trim();
+  }
+  if (!Array.isArray(record.pinned)) {
+    return { error: "Falta la lista pinned." };
+  }
+  if (record.pinned.length > SCRIPT_PIN_LIMIT) {
+    return { error: "Solo se pueden fijar tres scripts." };
+  }
+  const pinned: string[] = [];
+  for (const name of record.pinned) {
+    if (typeof name !== "string" || !hasKey(scripts, name)) {
+      return { error: "Un script fijado no existe." };
+    }
+    if (!pinned.includes(name)) {
+      pinned.push(name);
+    }
+  }
+  return { book: { pinned, scripts } };
+}
+
+export function serializeScripts(book: ProjectScripts): string {
+  const scripts: Record<string, string> = {};
+  for (const name of Object.keys(book.scripts).sort()) {
+    scripts[name] = book.scripts[name] ?? "";
+  }
+  return `${JSON.stringify({ pinned: book.pinned, scripts }, null, 2)}\n`;
+}
+
+function hasKey(record: Record<string, string>, name: string): boolean {
+  return Object.keys(record).includes(name);
+}
+
+function hasControl(text: string): boolean {
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (code < 32 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function scriptProblem(name: string, command: unknown): string | null {
+  if (
+    name.trim() !== name ||
+    name.length === 0 ||
+    name.length > SCRIPT_NAME_LIMIT
+  ) {
+    return "El nombre del script no es válido.";
+  }
+  if (name.includes("/") || name.includes("\\") || hasControl(name)) {
+    return "El nombre del script no es válido.";
+  }
+  if (typeof command !== "string") {
+    return "El comando tiene que ser texto.";
+  }
+  const text = command.trim();
+  if (
+    text.length === 0 ||
+    text.length > SCRIPT_COMMAND_LIMIT ||
+    text.includes("\n") ||
+    text.includes("\r") ||
+    hasControl(text)
+  ) {
+    return "El comando tiene que ser una sola línea.";
+  }
+  return null;
+}
+
+export function putScript(
+  book: ProjectScripts,
+  name: string,
+  command: string,
+): { book: ProjectScripts } | { error: string } {
+  const problem = scriptProblem(name, command);
+  if (problem) {
+    return { error: problem };
+  }
+  return {
+    book: {
+      pinned: book.pinned,
+      scripts: { ...book.scripts, [name]: command.trim() },
+    },
+  };
+}
+
+export function removeScript(
+  book: ProjectScripts,
+  name: string,
+): ProjectScripts {
+  const scripts = { ...book.scripts };
+  delete scripts[name];
+  return {
+    scripts,
+    pinned: book.pinned.filter((item) => item !== name),
+  };
+}
+
+export function pinScript(
+  book: ProjectScripts,
+  name: string,
+  pinned: boolean,
+): { book: ProjectScripts } | { error: string } {
+  if (!hasKey(book.scripts, name)) {
+    return { error: "Ese script no existe." };
+  }
+  const without = book.pinned.filter((item) => item !== name);
+  if (!pinned) {
+    return { book: { ...book, pinned: without } };
+  }
+  if (without.length >= SCRIPT_PIN_LIMIT) {
+    return { error: "Solo se pueden fijar tres scripts." };
+  }
+  return { book: { ...book, pinned: [...without, name] } };
+}
+
+export function visiblePins(book: ProjectScripts): string[] {
+  if (book.pinned.length > 0) {
+    return book.pinned.filter((name) => hasKey(book.scripts, name));
+  }
+  return Object.keys(book.scripts).sort().slice(0, SCRIPT_PIN_LIMIT);
+}

@@ -7,6 +7,7 @@ const FILE_BYTE_LIMIT: usize = 1024 * 1024;
 const MEDIA_BYTE_LIMIT: u64 = 6 * 1024 * 1024;
 const SEARCH_LIMIT: usize = 80;
 const SEARCH_VISIT_LIMIT: usize = 20_000;
+const INDEX_LIMIT: usize = 20_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +33,13 @@ pub struct WorkdirFile {
     pub truncated: bool,
     pub mime: Option<String>,
     pub media: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkdirIndex {
+    pub paths: Vec<String>,
+    pub truncated: bool,
 }
 
 pub fn list_workdir(repo_path: &str, directory: &str) -> Result<Vec<WorkdirEntry>, GitError> {
@@ -239,6 +247,40 @@ pub fn rename_workdir(repo_path: &str, file: &str, name: &str) -> Result<String,
     Ok(next)
 }
 
+pub fn move_workdir(repo_path: &str, file: &str, directory: &str) -> Result<String, GitError> {
+    let root = workdir(repo_path)?;
+    let relative = normalize_relative(file)?;
+    let full = contained(&root, &relative, false)?;
+    reject_git(&root, &full)?;
+    if full == root {
+        return Err(GitError::Io(
+            "No se puede mover la raíz del repositorio".into(),
+        ));
+    }
+    let raw_name = full
+        .file_name()
+        .and_then(|part| part.to_str())
+        .ok_or_else(|| GitError::Io("El nombre no es válido".into()))?;
+    let name = entry_name(raw_name)?;
+    let destination = resolve_dir(&root, directory)?;
+    if destination == full || destination.starts_with(&full) {
+        return Err(GitError::Io(
+            "No se puede mover una carpeta dentro de sí misma".into(),
+        ));
+    }
+    let next = child_relative(directory, &name)?;
+    if next == relative {
+        return Ok(relative);
+    }
+    let dest = contained(&root, &next, true)?;
+    reject_git(&root, &dest)?;
+    if dest.exists() {
+        return Err(GitError::Io("Ya existe un elemento con ese nombre".into()));
+    }
+    std::fs::rename(&full, &dest).map_err(io_message)?;
+    Ok(next)
+}
+
 pub fn remove_workdir(repo_path: &str, file: &str) -> Result<(), GitError> {
     let root = workdir(repo_path)?;
     let relative = normalize_relative(file)?;
@@ -280,6 +322,16 @@ pub fn write_workdir_file(repo_path: &str, file: &str, contents: &str) -> Result
     Ok(())
 }
 
+pub fn index_workdir(repo_path: &str) -> Result<WorkdirIndex, GitError> {
+    let root = workdir(repo_path)?;
+    let mut paths = Vec::new();
+    let mut seen = 0usize;
+    let mut truncated = false;
+    index_visit(&root, &root, 0, &mut seen, &mut paths, &mut truncated);
+    paths.sort();
+    Ok(WorkdirIndex { paths, truncated })
+}
+
 pub fn search_workdir(repo_path: &str, query: &str) -> Result<Vec<String>, GitError> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
@@ -294,6 +346,54 @@ pub fn search_workdir(repo_path: &str, query: &str) -> Result<Vec<String>, GitEr
     visit(&root, &root, &query, 0, &mut seen, &mut found);
     found.sort();
     Ok(found)
+}
+
+fn index_visit(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    seen: &mut usize,
+    found: &mut Vec<String>,
+    truncated: &mut bool,
+) {
+    if depth > 24 || *seen > SEARCH_VISIT_LIMIT || found.len() >= INDEX_LIMIT {
+        *truncated = true;
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut items: Vec<_> = entries.filter_map(|item| item.ok()).collect();
+    items.sort_by_key(|item| item.file_name());
+    for item in items {
+        if *seen > SEARCH_VISIT_LIMIT || found.len() >= INDEX_LIMIT {
+            *truncated = true;
+            return;
+        }
+        *seen += 1;
+        let file_name = item.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let Ok(kind) = item.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if skipped_dir(name) {
+                continue;
+            }
+            index_visit(root, &item.path(), depth + 1, seen, found, truncated);
+            continue;
+        }
+        let child = item.path();
+        let Some(relative) = child.strip_prefix(root).ok() else {
+            continue;
+        };
+        found.push(posix(relative));
+    }
 }
 
 fn visit(
@@ -601,6 +701,10 @@ mod tests {
         assert_eq!(found, vec!["src/app.ts".to_string()]);
         let hidden = search_workdir(&path, "left-pad").expect("hidden");
         assert!(hidden.is_empty());
+        let index = index_workdir(&path).expect("index");
+        assert!(index.paths.iter().any(|item| item == "src/app.ts"));
+        assert!(!index.paths.iter().any(|item| item.contains("left-pad")));
+        assert!(!index.truncated);
     }
 
     #[test]
@@ -671,5 +775,42 @@ mod tests {
         let clash = rename_workdir(&path, "keep.txt", "other.txt").expect_err("clash");
         assert!(clash.to_string().contains("Ya existe"));
         assert!(dir.0.join("keep.txt").is_file());
+    }
+
+    #[test]
+    fn moves_entries_and_rejects_unsafe_destinations() {
+        let dir = scratch();
+        let path = repo_path(&dir);
+        fs::create_dir_all(dir.0.join("src")).expect("src");
+        fs::create_dir_all(dir.0.join("docs")).expect("docs");
+        fs::create_dir_all(dir.0.join("box").join("inner")).expect("box");
+        fs::write(dir.0.join("a.txt"), "a\n").expect("a");
+        fs::write(dir.0.join("src").join("lib.ts"), "lib\n").expect("lib");
+        fs::write(dir.0.join("docs").join("a.txt"), "other\n").expect("docs a");
+
+        let moved = move_workdir(&path, "a.txt", "src").expect("move file");
+        assert_eq!(moved, "src/a.txt");
+        assert!(dir.0.join("src").join("a.txt").is_file());
+        assert!(!dir.0.join("a.txt").exists());
+
+        let same = move_workdir(&path, "src/a.txt", "src").expect("same folder");
+        assert_eq!(same, "src/a.txt");
+
+        let clash = move_workdir(&path, "src/a.txt", "docs").expect_err("clash");
+        assert!(clash.to_string().contains("Ya existe"));
+        assert!(dir.0.join("src").join("a.txt").is_file());
+
+        let shifted = move_workdir(&path, "src", "docs").expect("move dir");
+        assert_eq!(shifted, "docs/src");
+        assert!(dir.0.join("docs").join("src").join("lib.ts").is_file());
+        assert!(!dir.0.join("src").exists());
+
+        let nest = move_workdir(&path, "box", "box/inner").expect_err("nest");
+        assert!(nest.to_string().contains("dentro de sí misma"));
+        assert!(dir.0.join("box").join("inner").is_dir());
+
+        assert!(move_workdir(&path, "../a.txt", "").is_err());
+        assert!(move_workdir(&path, "docs/src/a.txt", "..").is_err());
+        assert!(move_workdir(&path, ".git/HEAD", "docs").is_err());
     }
 }

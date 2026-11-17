@@ -70,6 +70,9 @@ export function EditorPanel({
   sha,
   requestId,
   onRepositoryChanged,
+  indexed,
+  indexReady,
+  onRefreshIndex,
 }: {
   path: string;
   revision: number;
@@ -78,6 +81,9 @@ export function EditorPanel({
   sha: string | null;
   requestId: number;
   onRepositoryChanged: () => Promise<void>;
+  indexed: string[];
+  indexReady: boolean;
+  onRefreshIndex: () => void;
 }) {
   const [session, setSession] = useState<EditorSession>(() =>
     readSession(path),
@@ -335,6 +341,9 @@ export function EditorPanel({
             activePath={tab?.path ?? null}
             onOpen={openWork}
             onChange={handleTreeChange}
+            indexed={indexed}
+            indexReady={indexReady}
+            onRefreshIndex={onRefreshIndex}
           />
         </Panel>
         <PanelResizeHandle className="w-px bg-line" />

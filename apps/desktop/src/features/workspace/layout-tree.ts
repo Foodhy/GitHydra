@@ -9,6 +9,7 @@ export const PANELS = [
   "browser",
   "changes",
   "terminal",
+  "scripts",
 ] as const;
 
 export type PanelId = (typeof PANELS)[number];
@@ -60,6 +61,7 @@ export const panelLabel: Record<PanelId, string> = {
   browser: "Browser",
   changes: "Cambios",
   terminal: "Terminal",
+  scripts: "Scripts",
 };
 
 const PERMANENT: PanelId[] = ["branches", "changes"];
@@ -146,7 +148,7 @@ export function openPanel(tree: LayoutNode, panel: PanelId): LayoutNode {
 }
 
 export function closePanel(tree: LayoutNode, panel: PanelId): LayoutNode {
-  if (!isCenter(panel) && panel !== "terminal") {
+  if (!isCenter(panel) && panel !== "terminal" && panel !== "scripts") {
     return tree;
   }
   return extract(tree, panel) ?? tree;

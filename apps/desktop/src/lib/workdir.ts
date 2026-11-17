@@ -41,6 +41,15 @@ export function searchWorkdir(path: string, query: string): Promise<string[]> {
   return invoke<string[]>("search_workdir", { path, query });
 }
 
+export interface WorkdirIndex {
+  paths: string[];
+  truncated: boolean;
+}
+
+export function indexWorkdir(path: string): Promise<WorkdirIndex> {
+  return invoke<WorkdirIndex>("index_workdir", { path });
+}
+
 export function createWorkdirFile(
   path: string,
   directory: string,
@@ -67,4 +76,12 @@ export function renameWorkdir(
 
 export function removeWorkdir(path: string, file: string): Promise<void> {
   return invoke<void>("remove_workdir", { path, file });
+}
+
+export function moveWorkdir(
+  path: string,
+  file: string,
+  directory: string,
+): Promise<string> {
+  return invoke<string>("move_workdir", { path, file, directory });
 }
