@@ -21,7 +21,9 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useFileIndex } from "../../hooks/useFileIndex";
 import { useRepoSync } from "../../hooks/useRepoSync";
 import {
+  bindRestoreScreens,
   bindScriptsPanel,
+  bindTerminalFill,
   bindTerminalPanel,
   syncWindowPanels,
 } from "../../lib/file-menu";
@@ -61,6 +63,7 @@ import {
   type PanelId,
   panelLabel,
   place,
+  restoreScreens,
   restoreTerminal,
   setRatio,
 } from "./layout-tree";
@@ -94,6 +97,8 @@ export function WorkspaceShell({ path }: { path: string }) {
   } | null>(null);
   const editorRequest = useRef(0);
   const [trackedPath, setTrackedPath] = useState(path);
+  const [terminalLarge, setTerminalLarge] = useState(false);
+  const terminalLargeRef = useRef(false);
   const { container, ready, assignSlot } = useTerminalHost();
   const browserHost = useKeptHost();
   if (trackedPath !== path) {
@@ -102,7 +107,21 @@ export function WorkspaceShell({ path }: { path: string }) {
     setSelectedSha(null);
     setEditorTarget(null);
     setWorkFile(null);
+    if (terminalLargeRef.current) {
+      terminalLargeRef.current = false;
+      setTerminalLarge(false);
+    }
   }
+
+  const toggleTerminalLarge = useCallback(() => {
+    setTree((current) =>
+      findPane(current, "terminal") ? current : restoreTerminal(current),
+    );
+    setTerminalLarge((on) => {
+      terminalLargeRef.current = !on;
+      return !on;
+    });
+  }, []);
 
   const openTarget = useCallback(
     (file: string, sha: string | null, focus: boolean) => {
@@ -144,10 +163,17 @@ export function WorkspaceShell({ path }: { path: string }) {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key.toLowerCase() !== "p") {
+      if (event.altKey || event.repeat) {
         return;
       }
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+      if (!(event.metaKey || event.ctrlKey)) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key !== "p" && key !== "l") {
+        return;
+      }
+      if (key === "p" && event.shiftKey) {
         return;
       }
       const showing = useCommandUi.getState().quickOpen;
@@ -157,11 +183,15 @@ export function WorkspaceShell({ path }: { path: string }) {
       }
       event.preventDefault();
       event.stopPropagation();
+      if (key === "l") {
+        toggleTerminalLarge();
+        return;
+      }
       useCommandUi.getState().showQuickOpen();
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [toggleTerminalLarge]);
 
   async function refreshRepository() {
     const repo = await tauriGit.openRepository(path);
@@ -194,6 +224,26 @@ export function WorkspaceShell({ path }: { path: string }) {
       setTree((current) => restoreTerminal(current));
     });
   }, []);
+
+  useEffect(() => {
+    return bindTerminalFill(toggleTerminalLarge);
+  }, [toggleTerminalLarge]);
+
+  useEffect(() => {
+    return bindRestoreScreens(() => {
+      terminalLargeRef.current = false;
+      setTerminalLarge(false);
+      setTree((current) => restoreScreens(current));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (findPane(tree, "terminal") || !terminalLargeRef.current) {
+      return;
+    }
+    terminalLargeRef.current = false;
+    setTerminalLarge(false);
+  }, [tree]);
 
   useEffect(() => {
     return bindScriptsPanel(() => {
@@ -383,7 +433,16 @@ export function WorkspaceShell({ path }: { path: string }) {
       ) : null}
       <div className="min-h-0 flex-1">
         <LayoutBranch
-          node={tree}
+          node={
+            terminalLarge
+              ? {
+                  kind: "pane",
+                  id: "terminal-max",
+                  tabs: ["terminal"],
+                  active: "terminal",
+                }
+              : tree
+          }
           labelFor={(panel) =>
             panel === "browser" ? browserLabel : panelLabel(panel)
           }

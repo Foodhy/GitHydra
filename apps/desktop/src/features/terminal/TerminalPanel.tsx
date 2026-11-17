@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
 import { type ProjectScripts, visiblePins } from "@githydra/contracts";
 import { loadProjectScripts } from "../../lib/project-scripts";
+import { getUiScale, onUiScale } from "../../lib/ui-scale";
 import { useOverlay } from "../../stores/overlay";
 import { SCRIPT_ICON } from "../scripts/script-icons";
 import { pathFromDrop, shellToken, TERMINAL_INSERT } from "./insert";
@@ -355,7 +356,7 @@ function TerminalSession({
     }
     const term = new Terminal({
       convertEol: true,
-      fontSize: 13,
+      fontSize: Math.round(13 * getUiScale()),
       fontFamily: "SF Mono, ui-monospace, monospace",
       theme: terminalTheme(colorRef.current),
     });
@@ -509,6 +510,17 @@ function TerminalSession({
     term.options.theme = terminalTheme(color);
   }, [color]);
 
+  useEffect(() => {
+    return onUiScale((scale) => {
+      const term = termRef.current;
+      if (!term) {
+        return;
+      }
+      term.options.fontSize = Math.round(13 * scale);
+      fitRef.current?.fit();
+    });
+  }, []);
+
   return (
     <div
       ref={host}
@@ -520,11 +532,9 @@ function TerminalSession({
 }
 
 function terminalTheme(color: string) {
-  const surface = cssColor("--color-surface", "#12141a");
-  const foreground = cssColor("--color-text", "#e7e9ef");
   return {
-    background: mixHex(surface, color, 0.16),
-    foreground,
+    background: cssColor("--color-surface", "#12141a"),
+    foreground: cssColor("--color-text", "#e7e9ef"),
     cursor: color,
   };
 }
@@ -534,35 +544,6 @@ function cssColor(name: string, fallback: string): string {
     .getPropertyValue(name)
     .trim();
   return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
-}
-
-function mixHex(base: string, tint: string, amount: number): string {
-  const left = parseHex(base);
-  const right = parseHex(tint);
-  if (!left || !right) {
-    return base;
-  }
-  const channel = (from: number, to: number) =>
-    Math.round(from + (to - from) * amount);
-  return `#${[0, 1, 2]
-    .map((index) =>
-      channel(left[index] ?? 0, right[index] ?? 0)
-        .toString(16)
-        .padStart(2, "0"),
-    )
-    .join("")}`;
-}
-
-function parseHex(value: string): [number, number, number] | null {
-  const normalized = value.trim().replace("#", "");
-  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) {
-    return null;
-  }
-  return [
-    Number.parseInt(normalized.slice(0, 2), 16),
-    Number.parseInt(normalized.slice(2, 4), 16),
-    Number.parseInt(normalized.slice(4, 6), 16),
-  ];
 }
 
 function TerminalMenu({

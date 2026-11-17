@@ -1,16 +1,19 @@
 import { useNavigate } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { useEffect } from "react";
-import { installFileMenu, syncFileMenu } from "../../lib/file-menu";
+import { bindHome, installFileMenu, syncFileMenu } from "../../lib/file-menu";
 import { type t, useT } from "../../lib/i18n";
 import {
   bindRepoNavigation,
   closeRepoTab,
   focusRepoTab,
   openNewTab,
+  showRepoManagement,
 } from "../../lib/repo-actions";
 import { useGitProgress } from "../../lib/run-operation";
+import { getUiScale, setUiScale, stepUiScale } from "../../lib/ui-scale";
 import { useCommandUi } from "../../stores/command-ui";
+import { useOverlay } from "../../stores/overlay";
 import { useRepoTabs } from "../../stores/repo-tabs";
 import { CloneDialog } from "./CloneDialog";
 
@@ -23,6 +26,45 @@ export function AppChrome() {
   const notice = useCommandUi((state) => state.notice);
   const setNotice = useCommandUi((state) => state.setNotice);
   useGitProgress();
+
+  useEffect(() => {
+    return bindHome(() => showRepoManagement());
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.altKey || event.repeat || !(event.metaKey || event.ctrlKey)) {
+        return;
+      }
+      if (event.key === "-" || event.key === "_" || event.key === "Subtract") {
+        event.preventDefault();
+        event.stopPropagation();
+        void setUiScale(stepUiScale(getUiScale(), -1));
+        return;
+      }
+      if (event.key === "+" || event.key === "=" || event.key === "Add") {
+        event.preventDefault();
+        event.stopPropagation();
+        void setUiScale(stepUiScale(getUiScale(), 1));
+        return;
+      }
+      if (event.key.toLowerCase() !== "h") {
+        return;
+      }
+      const command = event.metaKey || event.ctrlKey;
+      if (!command) {
+        return;
+      }
+      if (useOverlay.getState().depth > 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      showRepoManagement();
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   useEffect(() => {
     return bindRepoNavigation((path) => {

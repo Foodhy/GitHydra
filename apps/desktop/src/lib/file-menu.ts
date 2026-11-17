@@ -24,6 +24,13 @@ import {
   revealActiveRepo,
   showRepoManagement,
 } from "./repo-actions";
+import {
+  getUiScale,
+  onUiScale,
+  setUiScale,
+  UI_SCALES,
+  type UiScale,
+} from "./ui-scale";
 
 interface ToggleItems {
   reopen: MenuItem;
@@ -31,6 +38,8 @@ interface ToggleItems {
   terminal: MenuItem;
   finder: MenuItem;
   quickOpen: MenuItem;
+  terminalFill: MenuItem;
+  restoreScreens: MenuItem;
 }
 
 let toggles: ToggleItems | null = null;
@@ -61,6 +70,9 @@ function track<T extends { setText: (text: string) => Promise<void> }>(
 }
 let showTerminal: (() => void) | null = null;
 let showScripts: (() => void) | null = null;
+let goHome: (() => void) | null = null;
+let fillTerminal: (() => void) | null = null;
+let restorePanels: (() => void) | null = null;
 let panelState: {
   enabled: boolean;
   open: Record<CenterView, boolean>;
@@ -78,6 +90,33 @@ export function bindTerminalPanel(show: () => void): () => void {
   return () => {
     if (showTerminal === show) {
       showTerminal = null;
+    }
+  };
+}
+
+export function bindHome(go: () => void): () => void {
+  goHome = go;
+  return () => {
+    if (goHome === go) {
+      goHome = null;
+    }
+  };
+}
+
+export function bindTerminalFill(fill: () => void): () => void {
+  fillTerminal = fill;
+  return () => {
+    if (fillTerminal === fill) {
+      fillTerminal = null;
+    }
+  };
+}
+
+export function bindRestoreScreens(restore: () => void): () => void {
+  restorePanels = restore;
+  return () => {
+    if (restorePanels === restore) {
+      restorePanels = null;
     }
   };
 }
@@ -123,6 +162,8 @@ export function syncFileMenu(state: {
   void toggles.terminal.setEnabled(state.hasRepo);
   void toggles.finder.setEnabled(state.hasRepo);
   void toggles.quickOpen.setEnabled(state.hasRepo);
+  void toggles.terminalFill.setEnabled(state.hasRepo);
+  void toggles.restoreScreens.setEnabled(state.hasRepo);
 }
 
 export function installFileMenu(): Promise<void> {
@@ -173,6 +214,34 @@ async function createFileMenu(): Promise<void> {
       action: () => run(revealActiveRepo),
     }),
     "menu.finder",
+  );
+  const home = track(
+    await MenuItem.new({
+      id: "go-home",
+      text: t("menu.home"),
+      accelerator: "CmdOrCtrl+Shift+H",
+      action: () => run(() => goHome?.()),
+    }),
+    "menu.home",
+  );
+  const terminalFill = track(
+    await MenuItem.new({
+      id: "terminal-fill",
+      text: t("menu.terminalFill"),
+      accelerator: "CmdOrCtrl+L",
+      enabled: false,
+      action: () => run(() => fillTerminal?.()),
+    }),
+    "menu.terminalFill",
+  );
+  const restoreScreensItem = track(
+    await MenuItem.new({
+      id: "restore-screens",
+      text: t("menu.restoreScreens"),
+      enabled: false,
+      action: () => run(() => restorePanels?.()),
+    }),
+    "menu.restoreScreens",
   );
   const quickOpen = track(
     await MenuItem.new({
@@ -282,6 +351,35 @@ async function createFileMenu(): Promise<void> {
     "menu.manage",
   );
 
+  const sizeChoices: { scale: UiScale; item: CheckMenuItem }[] = [];
+  for (const scale of UI_SCALES) {
+    const key = scale === 1 ? "menu.viewDefault" : null;
+    const item = await CheckMenuItem.new({
+      id: `ui-scale-${Math.round(scale * 100)}`,
+      text: key ? t(key) : `${Math.round(scale * 100)}%`,
+      checked: getUiScale() === scale,
+      action: () => {
+        void setUiScale(scale);
+      },
+    });
+    if (key) {
+      track(item, key);
+    }
+    sizeChoices.push({ scale, item });
+  }
+  const viewSize = track(
+    await Submenu.new({
+      text: t("menu.viewSize"),
+      items: sizeChoices.map((choice) => choice.item),
+    }),
+    "menu.viewSize",
+  );
+  onUiScale((scale) => {
+    for (const choice of sizeChoices) {
+      void choice.item.setChecked(choice.scale === scale);
+    }
+  });
+
   const file = await Submenu.new({
     text: "File",
     items: [
@@ -293,6 +391,8 @@ async function createFileMenu(): Promise<void> {
       initRepo,
       openRepo,
       quickOpen,
+      home,
+      terminalFill,
       manage,
       await PredefinedMenuItem.new({ item: "Separator" }),
       editor,
@@ -304,11 +404,18 @@ async function createFileMenu(): Promise<void> {
   const menu = await Menu.default();
   const items = await menu.items();
   let insertAt = 1;
+  let viewMenu: Submenu | null = null;
   for (const [index, item] of items.entries()) {
     const text = await item.text();
     if (text === "File" || text === "Archivo") {
       insertAt = index;
       await menu.remove(item);
+    }
+    if (
+      (text === "View" || text === "Vista" || text === "Visualización") &&
+      item instanceof Submenu
+    ) {
+      viewMenu = item;
     }
     if ((text === "Window" || text === "Ventana") && item instanceof Submenu) {
       for (const child of await item.items()) {
@@ -324,12 +431,33 @@ async function createFileMenu(): Promise<void> {
         browserPanel,
         terminalPanel,
         scriptsPanel,
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        restoreScreensItem,
       ]);
     }
   }
+  if (viewMenu) {
+    await viewMenu.append([
+      await PredefinedMenuItem.new({ item: "Separator" }),
+      viewSize,
+    ]);
+  } else {
+    await menu.insert(
+      await Submenu.new({ text: "View", items: [viewSize] }),
+      insertAt,
+    );
+  }
   await menu.insert(file, insertAt);
   const previous = await menu.setAsAppMenu();
-  toggles = { reopen, editor, terminal, finder, quickOpen };
+  toggles = {
+    reopen,
+    editor,
+    terminal,
+    finder,
+    quickOpen,
+    terminalFill,
+    restoreScreens: restoreScreensItem,
+  };
   panels = {
     history: historyPanel,
     editor: editorPanel,

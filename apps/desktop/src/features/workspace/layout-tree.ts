@@ -136,7 +136,40 @@ export function openPanel(tree: LayoutNode, panel: PanelId): LayoutNode {
   if (findPane(tree, panel)) {
     return activate(tree, panel);
   }
-  return addTab(tree, mainPane(tree).id, panel);
+  const host = isCenter(panel) ? restoreScreens(tree) : tree;
+  if (findPane(host, panel)) {
+    return activate(host, panel);
+  }
+  return addTab(host, mainPane(host).id, panel);
+}
+
+/** Puts history, editor, and browser back when every one of them is closed. */
+export function restoreScreens(
+  tree: LayoutNode,
+  ids: () => string = nextLayoutId,
+): LayoutNode {
+  if (CENTER.some((view) => findPane(tree, view))) {
+    return tree;
+  }
+  const center = pane(ids(), ["history", "editor", "browser"], "history");
+  const branches = findPane(tree, "branches");
+  const changes = findPane(tree, "changes");
+  if (branches && changes) {
+    const parent = findParent(tree, changes.id);
+    if (
+      parent &&
+      (parent.first.id === branches.id || parent.second.id === branches.id)
+    ) {
+      const branchesFirst = parent.first.id === branches.id;
+      const beside = split(ids(), "x", 0.62, center, changes);
+      return replace(tree, parent.id, {
+        ...parent,
+        first: branchesFirst ? branches : beside,
+        second: branchesFirst ? beside : branches,
+      });
+    }
+  }
+  return split(ids(), "x", 0.72, center, tree);
 }
 
 export function closePanel(tree: LayoutNode, panel: PanelId): LayoutNode {

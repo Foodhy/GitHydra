@@ -9,6 +9,7 @@ import {
   parseLayout,
   place,
   placementOf,
+  restoreScreens,
   restoreTerminal,
   setRatio,
   zoneAt,
@@ -95,6 +96,25 @@ assert.equal(restored.kind, "split");
 if (restored.kind === "split") {
   assert.equal(restored.ratio, 0.78);
 }
+const bare = closePanel(closed, "history");
+assert.equal(findPane(bare, "history"), null);
+assert.equal(findPane(bare, "editor"), null);
+assert.equal(findPane(bare, "browser"), null);
+const screens = restoreScreens(bare, ids());
+assert.deepEqual(findPane(screens, "history")?.tabs, [
+  "history",
+  "editor",
+  "browser",
+]);
+assert.equal(findPane(screens, "history")?.active, "history");
+assert.equal(findPane(screens, "branches") !== null, true);
+assert.equal(findPane(screens, "changes") !== null, true);
+assert.equal(placementOf(screens, "history")?.axis, "x");
+assert.equal(restoreScreens(home), home);
+const editorBack = openPanel(bare, "editor");
+assert.equal(findPane(editorBack, "editor")?.active, "editor");
+assert.equal(findPane(editorBack, "history")?.tabs.includes("browser"), true);
+
 const reopened = openPanel(closed, "browser");
 assert.equal(findPane(reopened, "browser")?.active, "browser");
 assert.equal(findPane(reopened, "history")?.tabs.includes("browser"), true);

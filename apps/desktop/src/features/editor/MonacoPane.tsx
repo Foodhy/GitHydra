@@ -1,8 +1,16 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMemo, useRef } from "react";
+import { getUiScale, onUiScale } from "../../lib/ui-scale";
 import { defineGitHydraTheme } from "./monaco";
 
 export type MonacoEditor = Parameters<OnMount>[0];
+
+function editorFont(scale: number): { fontSize: number; lineHeight: number } {
+  return {
+    fontSize: Math.round(13 * scale),
+    lineHeight: Math.round(20 * scale),
+  };
+}
 
 export interface CursorPoint {
   line: number;
@@ -43,9 +51,9 @@ export default function MonacoPane({
       domReadOnly: readOnly,
       automaticLayout: true,
       minimap: { enabled: true },
-      fontSize: 13,
+      fontSize: editorFont(getUiScale()).fontSize,
       fontFamily: "SF Mono, ui-monospace, monospace",
-      lineHeight: 20,
+      lineHeight: editorFont(getUiScale()).lineHeight,
       scrollBeyondLastLine: false,
       smoothScrolling: true,
       cursorSmoothCaretAnimation: "on" as const,
@@ -94,10 +102,17 @@ export default function MonacoPane({
           );
         };
         report();
+        const applyScale = (scale: number) => {
+          const next = editorFont(scale);
+          editor.updateOptions(next);
+        };
+        applyScale(getUiScale());
+        const stopScale = onUiScale(applyScale);
         const subscription = editor.onDidChangeCursorPosition(report);
         const ready = onReadyRef.current;
         ready(editor);
         editor.onDidDispose(() => {
+          stopScale();
           subscription.dispose();
           ready(null);
         });
